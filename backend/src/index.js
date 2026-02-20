@@ -274,6 +274,7 @@ app.get('/api/marketplace', requireAuth, async (req, res) => {
     const data = await r.json();
     const items = (data.servers || []).map(entry => {
       const s = entry.server;
+      if (!s) return null;
       const pkg = s.packages?.[0];
       const rem = s.remotes?.[0];
       let type, command;
