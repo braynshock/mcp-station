@@ -2,9 +2,7 @@ name: mcp-station
 
 services:
   host:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ghcr.io/braynshock/mcp-station:latest
     container_name: mcp-station-host
     restart: unless-stopped
     ports:
