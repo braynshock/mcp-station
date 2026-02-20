@@ -1280,6 +1280,8 @@ async function loadMarketplace(reset) {
   statusEl.textContent = 'Loading…';
   try {
     const params = new URLSearchParams();
+    const q = (document.getElementById('market-search').value || '').trim();
+    if (q) params.set('q', q);
     if (!reset && _mktNextCursor) params.set('cursor', _mktNextCursor);
     const data = await api.get('/api/marketplace?' + params);
     const items = data.items || [];
@@ -1300,7 +1302,7 @@ function loadMoreMarket() {
 
 function onMarketSearch() {
   clearTimeout(_mktSearchTimer);
-  _mktSearchTimer = setTimeout(renderFilteredMarket, 350);
+  _mktSearchTimer = setTimeout(() => loadMarketplace(true), 350);
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
