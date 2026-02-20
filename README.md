@@ -92,11 +92,34 @@ curl -X POST http://localhost:3000/api/servers \
 
 ---
 
+## MCP SSE Endpoint
+
+Connect any MCP client (LiteLLM, Claude Desktop, Cursor, etc.) to the multiplexed endpoint:
+
+```
+http://<host>:3000/mcp/sse
+```
+
+This implements the standard MCP SSE transport protocol and aggregates tools from all running stdio-based servers into a single endpoint.
+
+**LiteLLM config example:**
+```yaml
+mcp_servers:
+  - name: mcp-station
+    url: http://192.168.0.160:3000/mcp/sse
+    # If AUTH_TOKEN is set:
+    # headers:
+    #   Authorization: "Bearer <your-token>"
+    # or append ?token=<your-token> to the URL
+```
+
 ## REST API
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Health check |
+| `GET` | `/mcp/sse` | MCP SSE transport endpoint (for LiteLLM etc.) |
+| `POST` | `/mcp/messages` | MCP message endpoint (used by SSE sessions) |
 | `GET` | `/api/servers` | List all servers |
 | `POST` | `/api/servers` | Register a new server |
 | `GET` | `/api/servers/:id` | Get a server |
@@ -109,10 +132,10 @@ curl -X POST http://localhost:3000/api/servers \
 | `POST` | `/api/agents` | Create an agent |
 | `PATCH` | `/api/agents/:id` | Update an agent |
 | `DELETE` | `/api/agents/:id` | Delete an agent |
-| `GET` | `/api/events` | SSE stream of live events |
+| `GET` | `/api/events` | SSE stream of live UI events |
 | `GET` | `/api/stats` | Stats summary |
 
-All API routes (except `/health`) require `Authorization: Bearer <AUTH_TOKEN>` when `AUTH_TOKEN` is set.
+All API routes (except `/health` and `/mcp/messages`) require `Authorization: Bearer <AUTH_TOKEN>` when `AUTH_TOKEN` is set.
 
 ---
 
@@ -138,9 +161,11 @@ docker pull ghcr.io/braynshock/mcp-station:latest
 │  │  Express (port 3000)            │    │
 │  │  ├── GET /          → Web UI    │    │
 │  │  ├── /api/*         → REST API  │    │
-│  │  └── /api/events    → SSE       │    │
+│  │  ├── /api/events    → UI SSE    │    │
+│  │  ├── GET /mcp/sse   → MCP SSE   │    │
+│  │  └── POST /mcp/messages → MCP   │    │
 │  │                                 │    │
-│  │  Process Manager                │    │
+│  │  Process Manager (JSON-RPC)     │    │
 │  │  ├── server-filesystem (stdio)  │    │
 │  │  ├── server-brave-search (stdio)│    │
 │  │  └── github-mcp (docker)        │    │
@@ -148,15 +173,15 @@ docker pull ghcr.io/braynshock/mcp-station:latest
 │                   │ :3000               │
 └───────────────────┼─────────────────────┘
                     │
-          Claude Desktop / Cursor
-          (connects via SSE)
+          Claude Desktop / Cursor / LiteLLM
+          (connects via /mcp/sse)
 ```
 
 ---
 
 ## Roadmap
 
-- [ ] MCP multiplexing — expose all servers as a single SSE endpoint
+- [x] MCP multiplexing — expose all servers as a single SSE endpoint (`/mcp/sse`)
 - [ ] Tool-level access control per agent
 - [ ] OAuth / multi-user support
 - [ ] Metrics & call history dashboard
