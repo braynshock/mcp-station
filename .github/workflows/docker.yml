@@ -14,6 +14,9 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    # Permissions block is not required when using PAT,
+    # but you can leave it if you want.
     permissions:
       contents: read
       packages: write
@@ -33,7 +36,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.PAT_TOKEN }}
 
       - name: Extract metadata
         id: meta
