@@ -929,7 +929,7 @@
           <div class="page-title">Settings</div>
           <div class="page-subtitle">MCP host configuration</div>
         </div>
-        <button class="btn btn-primary">Save Changes</button>
+        <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
       </div>
       <div style="max-width:520px;display:flex;flex-direction:column;gap:16px;">
         <div class="form-group">
@@ -939,8 +939,8 @@
         </div>
         <div class="form-group">
           <label class="form-label">Auth Token</label>
-          <input class="form-input" type="password" value="sk-mcp-••••••••••••" />
-          <div class="form-hint">Bearer token required by MCP clients</div>
+          <input id="settings-auth-token" class="form-input" type="password" placeholder="Paste your auth token…" />
+          <div class="form-hint">Bearer token required by MCP clients and the web UI</div>
         </div>
         <div class="form-group">
           <label class="form-label">Default Transport</label>
@@ -959,6 +959,17 @@
     </div>
 
   </main>
+</div>
+
+<!-- Token Entry Overlay -->
+<div id="token-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:900;align-items:center;justify-content:center">
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:32px;max-width:400px;width:90%">
+    <div style="font-size:18px;font-weight:600;margin-bottom:8px">Connect to MCP Station</div>
+    <div style="color:var(--muted);font-size:13px;margin-bottom:20px">Enter the <code style="background:var(--bg);padding:1px 5px;border-radius:4px">AUTH_TOKEN</code> configured for this instance.</div>
+    <input id="token-input" class="form-input" type="password" placeholder="Paste your auth token…" style="margin-bottom:12px" onkeydown="if(event.key==='Enter')submitToken()" />
+    <div id="token-error" style="color:#ef4444;font-size:12px;margin-bottom:12px;display:none">Invalid token — try again.</div>
+    <button class="btn btn-primary" style="width:100%" onclick="submitToken()">Connect</button>
+  </div>
 </div>
 
 <!-- Add Server Modal -->
@@ -1046,16 +1057,57 @@ function esc(s) {
 }
 
 // ── API helpers ───────────────────────────────────────────────────────────────
+const TOKEN_KEY = 'mcp_auth_token';
+function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
+function setToken(t) { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); }
+
+function showTokenOverlay() {
+  const el = document.getElementById('token-overlay');
+  el.style.display = 'flex';
+  document.getElementById('token-error').style.display = 'none';
+  document.getElementById('token-input').value = '';
+  setTimeout(() => document.getElementById('token-input').focus(), 50);
+}
+function hideTokenOverlay() { document.getElementById('token-overlay').style.display = 'none'; }
+
+async function submitToken() {
+  const val = document.getElementById('token-input').value.trim();
+  if (!val) return;
+  setToken(val);
+  const ok = await fetch('/api/servers', { headers: { Authorization: 'Bearer ' + val } });
+  if (ok.status === 401) {
+    setToken('');
+    document.getElementById('token-error').style.display = '';
+    return;
+  }
+  hideTokenOverlay();
+  await loadData();
+  connectSSE();
+}
+
 const api = {
-  async get(path) { const r = await fetch(path); return r.json(); },
-  async post(path, body) { const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); return r.json(); },
-  async patch(path, body) { const r = await fetch(path, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); return r.json(); },
-  async delete(path) { await fetch(path, { method:'DELETE' }); },
+  _h(extra = {}) {
+    const t = getToken();
+    return t ? { ...extra, Authorization: 'Bearer ' + t } : extra;
+  },
+  async _check(r) {
+    if (r.status === 401) { setToken(''); showTokenOverlay(); throw new Error('Unauthorized'); }
+    return r;
+  },
+  async get(path) { return (await this._check(await fetch(path, { headers: this._h() }))).json(); },
+  async post(path, body) { return (await this._check(await fetch(path, { method:'POST', headers: this._h({'Content-Type':'application/json'}), body: JSON.stringify(body) }))).json(); },
+  async patch(path, body) { return (await this._check(await fetch(path, { method:'PATCH', headers: this._h({'Content-Type':'application/json'}), body: JSON.stringify(body) }))).json(); },
+  async delete(path) { await this._check(await fetch(path, { method:'DELETE', headers: this._h() })); },
 };
 
 // ── SSE live updates ──────────────────────────────────────────────────────────
+let _sseSource = null;
 function connectSSE() {
-  const es = new EventSource('/api/events');
+  if (_sseSource) { _sseSource.close(); _sseSource = null; }
+  const t = getToken();
+  const url = t ? `/api/events?token=${encodeURIComponent(t)}` : '/api/events';
+  const es = new EventSource(url);
+  _sseSource = es;
   es.addEventListener('status', e => {
     const { serverId, status } = JSON.parse(e.data);
     const s = servers.find(x => x.id === serverId);
@@ -1281,9 +1333,13 @@ async function installMarket(m) {
   await loadData();
 }
 
+// ── Settings ──────────────────────────────────────────────────────────────────
+function saveSettings() {
+  const val = document.getElementById('settings-auth-token').value.trim();
+  if (val) { setToken(val); connectSSE(); loadData(); }
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
-loadData();
-connectSSE();
 
 function showPage(name, el) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
@@ -1321,6 +1377,15 @@ function updateTypeHint() {
 
 function addServer() {
   closeModal('add-server');
+}
+
+async function init() {
+  const stored = getToken();
+  const tokenEl = document.getElementById('settings-auth-token');
+  if (tokenEl && stored) tokenEl.value = stored;
+  if (!stored) { showTokenOverlay(); return; }
+  await loadData();
+  connectSSE();
 }
 
 init();
