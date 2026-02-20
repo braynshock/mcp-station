@@ -141,8 +141,9 @@ app.use(express.static(join(ROOT, 'public')));
 // Auth middleware for API routes
 function requireAuth(req, res, next) {
   if (AUTH_TOKEN === 'changeme') return next(); // dev mode - no auth
-  const token = req.headers['authorization']?.replace('Bearer ', '');
-  if (token !== AUTH_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
+  const header = req.headers['authorization']?.replace('Bearer ', '');
+  const query = req.query.token; // used by EventSource (no custom header support)
+  if (header !== AUTH_TOKEN && query !== AUTH_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
   next();
 }
 
