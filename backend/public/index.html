@@ -770,11 +770,11 @@
       </div>
       <div class="nav-item" onclick="showPage('servers', this)">
         <span class="icon">⚙</span> MCP Servers
-        <span class="nav-badge">4</span>
+        <span class="nav-badge" id="nav-badge-servers" style="display:none">0</span>
       </div>
       <div class="nav-item" onclick="showPage('agents', this)">
         <span class="icon">✦</span> Agents
-        <span class="nav-badge">2</span>
+        <span class="nav-badge" id="nav-badge-agents" style="display:none">0</span>
       </div>
       <div class="nav-item" onclick="showPage('marketplace', this)">
         <span class="icon">◈</span> Marketplace
@@ -1044,6 +1044,7 @@
 let servers = [];
 let agents = [];
 let marketplaceItems = [];
+let _mktAllItems = [];
 let _mktNextCursor = null;
 let _mktLoaded = false;
 let _mktSearchTimer = null;
@@ -1140,6 +1141,12 @@ function renderAll() {
   document.getElementById('stat-servers').textContent = running.length;
   document.getElementById('stat-total').textContent = servers.length;
   document.getElementById('stat-agents').textContent = agents.length;
+  const serversBadge = document.getElementById('nav-badge-servers');
+  serversBadge.textContent = servers.length;
+  serversBadge.style.display = servers.length ? '' : 'none';
+  const agentsBadge = document.getElementById('nav-badge-agents');
+  agentsBadge.textContent = agents.length;
+  agentsBadge.style.display = agents.length ? '' : 'none';
   document.getElementById('dashboard-cards').innerHTML = running.map(s => renderCard(s)).join('') || '<div style="color:var(--muted);font-size:13px;padding:20px 0">No servers running. Add one to get started.</div>';
   document.getElementById('servers-cards').innerHTML = servers.map(s => renderCard(s)).join('') || '<div style="color:var(--muted);font-size:13px;padding:20px 0">No servers yet. Click "Add Server" to register one.</div>';
   document.getElementById('agents-cards').innerHTML = agents.map(a => renderAgentCard(a)).join('') || '<div style="color:var(--muted);font-size:13px;padding:20px 0">No agents yet. Create one to compose servers together.</div>';
@@ -1229,26 +1236,43 @@ function renderMarketCard(m, idx) {
 }
 
 function renderMarketCards(items, append) {
-  const startIdx = append ? marketplaceItems.length : 0;
-  if (!append) marketplaceItems = [];
-  marketplaceItems.push(...items);
+  if (!append) _mktAllItems = [];
+  _mktAllItems.push(...items);
+  renderFilteredMarket();
+}
+
+function renderFilteredMarket() {
+  const q = (document.getElementById('market-search').value || '').trim().toLowerCase();
+  const filtered = q
+    ? _mktAllItems.filter(m =>
+        m.name.toLowerCase().includes(q) ||
+        m.desc.toLowerCase().includes(q) ||
+        (m.command || '').toLowerCase().includes(q))
+    : _mktAllItems;
+  marketplaceItems = filtered;
   const el = document.getElementById('market-cards');
-  if (!append) el.innerHTML = '';
-  el.insertAdjacentHTML('beforeend', items.map((m, i) => renderMarketCard(m, startIdx + i)).join(''));
+  el.innerHTML = filtered.map((m, i) => renderMarketCard(m, i)).join('');
+  const statusEl = document.getElementById('market-status');
+  if (!filtered.length) {
+    statusEl.style.display = '';
+    statusEl.textContent = q ? `No servers found for "${q}".` : 'No servers available.';
+  } else {
+    statusEl.style.display = 'none';
+  }
 }
 
 function installMarketByIdx(idx) {
   installMarket(marketplaceItems[idx]);
 }
 
-async function loadMarketplace(reset, q) {
+async function loadMarketplace(reset) {
   if (reset === undefined) reset = true;
-  if (q === undefined) q = '';
   const statusEl = document.getElementById('market-status');
   const moreEl = document.getElementById('market-more');
   if (reset) {
     _mktLoaded = false;
     _mktNextCursor = null;
+    _mktAllItems = [];
     document.getElementById('market-cards').innerHTML = '';
     moreEl.style.display = 'none';
   }
@@ -1256,18 +1280,12 @@ async function loadMarketplace(reset, q) {
   statusEl.textContent = 'Loading…';
   try {
     const params = new URLSearchParams();
-    if (q) params.set('q', q);
     if (!reset && _mktNextCursor) params.set('cursor', _mktNextCursor);
     const data = await api.get('/api/marketplace?' + params);
     const items = data.items || [];
     if (data.error && !items.length) throw new Error(data.error);
     _mktNextCursor = data.nextCursor || null;
     _mktLoaded = true;
-    statusEl.style.display = 'none';
-    if (!items.length && !marketplaceItems.length) {
-      statusEl.style.display = '';
-      statusEl.textContent = q ? 'No servers found for "' + q + '".' : 'No servers available.';
-    }
     renderMarketCards(items, !reset);
     moreEl.style.display = _mktNextCursor ? '' : 'none';
   } catch (err) {
@@ -1277,15 +1295,12 @@ async function loadMarketplace(reset, q) {
 }
 
 function loadMoreMarket() {
-  const q = document.getElementById('market-search').value.trim();
-  loadMarketplace(false, q);
+  loadMarketplace(false);
 }
 
 function onMarketSearch() {
   clearTimeout(_mktSearchTimer);
-  _mktSearchTimer = setTimeout(() => {
-    loadMarketplace(true, document.getElementById('market-search').value.trim());
-  }, 350);
+  _mktSearchTimer = setTimeout(renderFilteredMarket, 350);
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
