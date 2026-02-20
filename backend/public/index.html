@@ -885,10 +885,15 @@
       <div class="page-header">
         <div>
           <div class="page-title">Marketplace</div>
-          <div class="page-subtitle">Discover and install community MCP servers</div>
+          <div class="page-subtitle">Discover and install MCP servers · <a href="https://mcpmarket.com/" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">mcpmarket.com ↗</a></div>
         </div>
+        <input id="market-search" class="form-input" style="width:220px;padding:7px 12px;font-size:13px" placeholder="Search servers…" oninput="onMarketSearch()" />
       </div>
+      <div id="market-status" style="color:var(--muted);font-size:13px;padding:12px 0;display:none"></div>
       <div class="cards-grid" id="market-cards"></div>
+      <div id="market-more" style="text-align:center;padding:24px 0;display:none">
+        <button class="btn btn-ghost" onclick="loadMoreMarket()">Load more</button>
+      </div>
     </div>
 
     <!-- LOGS -->
@@ -1031,17 +1036,14 @@
 // ── Live API state ────────────────────────────────────────────────────────────
 let servers = [];
 let agents = [];
+let marketplaceItems = [];
+let _mktNextCursor = null;
+let _mktLoaded = false;
+let _mktSearchTimer = null;
 
-const marketplace = [
-  { name: 'Slack', icon: '💬', desc: 'Send messages, search channels, and manage Slack from any MCP client.', type: 'npm', command: '@modelcontextprotocol/server-slack', tools: 8 },
-  { name: 'Obsidian', icon: '🪨', desc: 'Read and write to your local Obsidian vault. Full note graph access.', type: 'npm', command: 'mcp-obsidian', tools: 5 },
-  { name: 'Puppeteer', icon: '🎭', desc: 'Headless browser automation — screenshot pages, fill forms, extract content.', type: 'docker', command: 'ghcr.io/modelcontextprotocol/puppeteer', tools: 6 },
-  { name: 'Linear', icon: '▲', desc: 'Project management, issue tracking, and sprint planning through Linear.', type: 'npm', command: '@linear/mcp-server', tools: 9 },
-  { name: 'Brave Search', icon: '🔍', desc: 'Web and local search via the Brave Search API.', type: 'npm', command: '@modelcontextprotocol/server-brave-search', tools: 2 },
-  { name: 'GitHub', icon: '🐙', desc: 'Full GitHub API integration. Manage repos, issues, PRs, and code.', type: 'docker', command: 'ghcr.io/github/github-mcp-server', tools: 10 },
-  { name: 'PostgreSQL', icon: '🗃', desc: 'Read-only SQL query access to a PostgreSQL database.', type: 'npm', command: '@modelcontextprotocol/server-postgres', tools: 3 },
-  { name: 'Filesystem', icon: '📁', desc: 'Secure file operations with configurable access controls.', type: 'npm', command: '@modelcontextprotocol/server-filesystem', tools: 6 },
-];
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 const api = {
@@ -1081,7 +1083,6 @@ function renderAll() {
   document.getElementById('dashboard-cards').innerHTML = running.map(s => renderCard(s)).join('') || '<div style="color:var(--muted);font-size:13px;padding:20px 0">No servers running. Add one to get started.</div>';
   document.getElementById('servers-cards').innerHTML = servers.map(s => renderCard(s)).join('') || '<div style="color:var(--muted);font-size:13px;padding:20px 0">No servers yet. Click "Add Server" to register one.</div>';
   document.getElementById('agents-cards').innerHTML = agents.map(a => renderAgentCard(a)).join('') || '<div style="color:var(--muted);font-size:13px;padding:20px 0">No agents yet. Create one to compose servers together.</div>';
-  document.getElementById('market-cards').innerHTML = marketplace.map(m => renderMarketCard(m)).join('');
   // Server checkboxes in agent modal
   document.getElementById('server-checkboxes').innerHTML = servers.map(s => `
     <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg)">
@@ -1139,24 +1140,91 @@ function renderAgentCard(a) {
   </div>`;
 }
 
-function renderMarketCard(m) {
+function renderMarketCard(m, idx) {
+  const iconHtml = m.icon && m.icon.startsWith('http')
+    ? `<img src="${esc(m.icon)}" style="width:32px;height:32px;border-radius:6px;object-fit:cover" onerror="this.style.display='none'" />`
+    : `<span style="font-size:22px">${m.icon || '⚙'}</span>`;
+  const typeColors = { npm: 'var(--accent)', docker: '#7c6aff', remote: '#ffa500', local: '#ff6b4a' };
+  const links = [
+    m.githubUrl ? `<a href="${esc(m.githubUrl)}" target="_blank" rel="noopener" style="color:var(--muted);font-size:11px;text-decoration:none">GitHub ↗</a>` : '',
+    m.websiteUrl ? `<a href="${esc(m.websiteUrl)}" target="_blank" rel="noopener" style="color:var(--muted);font-size:11px;text-decoration:none">Website ↗</a>` : '',
+  ].filter(Boolean).join('<span style="color:var(--border);margin:0 4px">·</span>');
   return `
   <div class="server-card" style="cursor:default">
     <div class="card-top">
       <div class="card-icon-wrap">
-        <div class="card-icon" style="background:var(--surface2);font-size:22px">${m.icon}</div>
+        <div class="card-icon" style="background:var(--surface2);display:flex;align-items:center;justify-content:center;overflow:hidden">${iconHtml}</div>
         <div>
-          <div class="card-name">${m.name}</div>
-          <div class="card-type">${m.type} · ${m.tools} tools</div>
+          <div class="card-name">${esc(m.name)}</div>
+          <div class="card-type" style="color:${typeColors[m.type]||'var(--muted)'}">${esc(m.type)}</div>
         </div>
       </div>
     </div>
-    <div class="card-desc">${m.desc}</div>
+    <div class="card-desc">${esc(m.desc)}</div>
     <div class="card-footer">
-      <div></div>
-      <button class="btn btn-primary" style="font-size:12px;padding:7px 14px;" onclick="installMarket(${JSON.stringify(m).replace(/"/g,'&quot;')})">Install</button>
+      <div style="display:flex;gap:6px;align-items:center">${links}</div>
+      <button class="btn btn-primary" style="font-size:12px;padding:7px 14px;" onclick="installMarketByIdx(${idx})">Install</button>
     </div>
   </div>`;
+}
+
+function renderMarketCards(items, append) {
+  const startIdx = append ? marketplaceItems.length : 0;
+  if (!append) marketplaceItems = [];
+  marketplaceItems.push(...items);
+  const el = document.getElementById('market-cards');
+  if (!append) el.innerHTML = '';
+  el.insertAdjacentHTML('beforeend', items.map((m, i) => renderMarketCard(m, startIdx + i)).join(''));
+}
+
+function installMarketByIdx(idx) {
+  installMarket(marketplaceItems[idx]);
+}
+
+async function loadMarketplace(reset, q) {
+  if (reset === undefined) reset = true;
+  if (q === undefined) q = '';
+  const statusEl = document.getElementById('market-status');
+  const moreEl = document.getElementById('market-more');
+  if (reset) {
+    _mktLoaded = false;
+    _mktNextCursor = null;
+    document.getElementById('market-cards').innerHTML = '';
+    moreEl.style.display = 'none';
+  }
+  statusEl.style.display = '';
+  statusEl.textContent = 'Loading…';
+  try {
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (!reset && _mktNextCursor) params.set('cursor', _mktNextCursor);
+    const data = await api.get('/api/marketplace?' + params);
+    if (data.error && !data.items.length) throw new Error(data.error);
+    _mktNextCursor = data.nextCursor || null;
+    _mktLoaded = true;
+    statusEl.style.display = 'none';
+    if (!data.items.length && !marketplaceItems.length) {
+      statusEl.style.display = '';
+      statusEl.textContent = q ? 'No servers found for "' + q + '".' : 'No servers available.';
+    }
+    renderMarketCards(data.items, !reset);
+    moreEl.style.display = _mktNextCursor ? '' : 'none';
+  } catch (err) {
+    statusEl.style.display = '';
+    statusEl.textContent = 'Failed to load marketplace: ' + err.message;
+  }
+}
+
+function loadMoreMarket() {
+  const q = document.getElementById('market-search').value.trim();
+  loadMarketplace(false, q);
+}
+
+function onMarketSearch() {
+  clearTimeout(_mktSearchTimer);
+  _mktSearchTimer = setTimeout(() => {
+    loadMarketplace(true, document.getElementById('market-search').value.trim());
+  }, 350);
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -1206,7 +1274,8 @@ async function addAgent() {
 }
 
 async function installMarket(m) {
-  await api.post('/api/servers', { name: m.name, icon: m.icon, type: m.type, command: m.command, transport: 'stdio', desc: m.desc, tools: [] });
+  const transport = m.type === 'remote' ? 'remote' : 'stdio';
+  await api.post('/api/servers', { name: m.name, icon: m.icon, type: m.type, command: m.command, transport, desc: m.desc, tools: [] });
   showPage('servers');
   await loadData();
 }
@@ -1220,6 +1289,7 @@ function showPage(name, el) {
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+name).classList.add('active');
   if (el) el.classList.add('active');
+  if (name === 'marketplace' && !_mktLoaded) loadMarketplace();
 }
 
 function openModal(name) {
