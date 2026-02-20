@@ -40,8 +40,11 @@ function saveConfig(cfg) {
 let config = loadConfig();
 
 // ─── Process registry ─────────────────────────────────────────────────────────
-const processes = new Map(); // id -> { proc, logs, status }
+const processes = new Map(); // id -> { proc, logs, status, restartCount, restartTimer }
 const sseClients = new Set(); // connected SSE clients
+
+const MAX_RESTARTS = 5;
+const RESTART_DELAYS = [5000, 10000, 20000, 40000, 60000]; // exponential backoff (ms)
 
 function broadcast(event, data) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -101,9 +104,35 @@ function startServer(server) {
 
   proc.on('close', (code) => {
     const entry = processes.get(server.id);
-    if (entry) entry.status = 'stopped';
+    if (!entry) return;
+    entry.status = 'stopped';
+    entry.proc = null;
     broadcast('status', { serverId: server.id, status: 'stopped', code });
     appendLog(server.id, `[station] Process exited with code ${code}`);
+
+    // Auto-restart on non-zero exit if server is still enabled
+    const cfg = config.servers.find((s) => s.id === server.id);
+    if (cfg && cfg.enabled !== false && code !== 0) {
+      const count = entry.restartCount || 0;
+      if (count < MAX_RESTARTS) {
+        const delay = RESTART_DELAYS[Math.min(count, RESTART_DELAYS.length - 1)];
+        entry.restartCount = count + 1;
+        entry.status = 'restarting';
+        broadcast('status', { serverId: server.id, status: 'restarting' });
+        appendLog(server.id, `[station] Restart ${count + 1}/${MAX_RESTARTS} in ${delay / 1000}s…`);
+        entry.restartTimer = setTimeout(() => {
+          const current = processes.get(server.id);
+          if (current && current.status === 'restarting') startServer(cfg);
+        }, delay);
+      } else {
+        appendLog(server.id, `[station] Max restarts reached — server marked offline`);
+        broadcast('status', { serverId: server.id, status: 'error' });
+        entry.status = 'error';
+        entry.restartCount = 0;
+      }
+    } else if (code === 0) {
+      entry.restartCount = 0;
+    }
   });
 
   proc.on('error', (err) => {
@@ -117,6 +146,12 @@ function startServer(server) {
 function stopServer(serverId) {
   const entry = processes.get(serverId);
   if (!entry) return;
+  // Cancel any pending auto-restart
+  if (entry.restartTimer) {
+    clearTimeout(entry.restartTimer);
+    entry.restartTimer = null;
+  }
+  entry.restartCount = 0;
   if (entry.proc) {
     entry.proc.kill('SIGTERM');
   }
