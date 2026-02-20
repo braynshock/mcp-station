@@ -1,0 +1,1258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP Station — Server Manager</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #0a0c10;
+    --surface: #111318;
+    --surface2: #181b22;
+    --border: #1f2330;
+    --accent: #00e5a0;
+    --accent2: #7c6aff;
+    --accent3: #ff6b4a;
+    --text: #e8eaf0;
+    --muted: #5a6072;
+    --online: #00e5a0;
+    --offline: #ff4d6d;
+    --warn: #ffaa00;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Grid noise texture */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: 
+      linear-gradient(rgba(0,229,160,0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,160,0.015) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Glow orb */
+  body::after {
+    content: '';
+    position: fixed;
+    top: -200px;
+    right: -100px;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, rgba(124,106,255,0.08) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    min-height: 100vh;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 28px 0;
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+  }
+
+  .logo {
+    padding: 0 24px 28px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .logo-mark {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .logo-icon {
+    width: 32px;
+    height: 32px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 800;
+    color: #000;
+  }
+
+  .logo-text {
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+
+  .logo-sub {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    color: var(--muted);
+    margin-top: 2px;
+    letter-spacing: 0.1em;
+  }
+
+  .nav {
+    padding: 20px 12px;
+    flex: 1;
+  }
+
+  .nav-section {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    color: var(--muted);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 0 12px;
+    margin-bottom: 8px;
+    margin-top: 20px;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--muted);
+    transition: all 0.15s;
+    user-select: none;
+  }
+
+  .nav-item:hover { background: var(--surface2); color: var(--text); }
+  .nav-item.active { background: rgba(0,229,160,0.1); color: var(--accent); }
+  .nav-item .icon { font-size: 16px; width: 20px; text-align: center; }
+
+  .nav-badge {
+    margin-left: auto;
+    background: var(--accent2);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .sidebar-footer {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+  }
+
+  .server-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--online);
+    box-shadow: 0 0 6px var(--online);
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  /* Main content */
+  .main {
+    padding: 36px 40px;
+    overflow-y: auto;
+  }
+
+  .page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 32px;
+  }
+
+  .page-title {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1;
+  }
+
+  .page-subtitle {
+    color: var(--muted);
+    font-size: 13px;
+    margin-top: 6px;
+    font-weight: 400;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    border: none;
+    transition: all 0.15s;
+    letter-spacing: -0.01em;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #000;
+  }
+  .btn-primary:hover { background: #00ffc3; transform: translateY(-1px); box-shadow: 0 4px 20px rgba(0,229,160,0.3); }
+
+  .btn-ghost {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-ghost:hover { background: var(--surface2); border-color: var(--muted); }
+
+  .btn-danger {
+    background: rgba(255,77,109,0.15);
+    color: var(--offline);
+    border: 1px solid rgba(255,77,109,0.2);
+  }
+  .btn-danger:hover { background: rgba(255,77,109,0.25); }
+
+  /* Stats row */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--accent-color, var(--accent));
+  }
+
+  .stat-label {
+    font-size: 11px;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  .stat-value {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    color: var(--accent-color, var(--accent));
+  }
+
+  .stat-desc {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+
+  /* Section */
+  .section {
+    margin-bottom: 36px;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+
+  .section-title {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  /* Cards grid */
+  .cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+
+  .server-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    transition: all 0.2s;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .server-card:hover {
+    border-color: rgba(0,229,160,0.3);
+    background: var(--surface2);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+  }
+
+  .card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+
+  .card-icon-wrap {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .card-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+  }
+
+  .card-name {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  .card-type {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  .card-status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 500;
+  }
+
+  .card-status.running { color: var(--online); }
+  .card-status.stopped { color: var(--offline); }
+  .card-status.paused { color: var(--warn); }
+
+  .card-desc {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+    margin-bottom: 14px;
+  }
+
+  .card-tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 14px;
+  }
+
+  .tool-tag {
+    background: rgba(124,106,255,0.12);
+    color: var(--accent2);
+    border: 1px solid rgba(124,106,255,0.2);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 5px;
+  }
+
+  .card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  .card-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+  }
+
+  .card-actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  .icon-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.15s;
+  }
+
+  .icon-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--muted); }
+  .icon-btn.start:hover { color: var(--online); border-color: var(--online); background: rgba(0,229,160,0.08); }
+  .icon-btn.stop:hover { color: var(--offline); border-color: var(--offline); background: rgba(255,77,109,0.08); }
+
+  /* Toggle */
+  .toggle {
+    width: 36px;
+    height: 20px;
+    background: var(--border);
+    border-radius: 10px;
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .toggle.on { background: var(--accent); }
+
+  .toggle::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: white;
+    transition: transform 0.2s;
+  }
+
+  .toggle.on::after { transform: translateX(16px); }
+
+  /* Agent cards */
+  .agent-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+  }
+
+  .agent-name {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  .agent-desc {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 14px;
+    line-height: 1.5;
+  }
+
+  .agent-servers {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+
+  .server-pill {
+    background: rgba(0,229,160,0.08);
+    border: 1px solid rgba(0,229,160,0.2);
+    color: var(--accent);
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 3px 10px;
+    border-radius: 20px;
+  }
+
+  /* Modal */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(4px);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+
+  .modal-overlay.open { opacity: 1; pointer-events: all; }
+
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 32px;
+    width: 520px;
+    max-width: 90vw;
+    transform: translateY(20px);
+    transition: transform 0.2s;
+  }
+
+  .modal-overlay.open .modal { transform: translateY(0); }
+
+  .modal-title {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    margin-bottom: 4px;
+  }
+
+  .modal-sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 24px;
+  }
+
+  .form-group {
+    margin-bottom: 16px;
+  }
+
+  .form-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 700;
+    margin-bottom: 7px;
+    color: var(--text);
+    letter-spacing: 0.01em;
+  }
+
+  .form-input, .form-select, .form-textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .form-input:focus, .form-select:focus, .form-textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0,229,160,0.08);
+  }
+
+  .form-select { appearance: none; cursor: pointer; }
+  .form-textarea { resize: vertical; min-height: 80px; }
+
+  .form-hint {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 5px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .modal-footer {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* Log viewer */
+  .log-viewer {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    line-height: 1.7;
+    max-height: 200px;
+    overflow-y: auto;
+    color: var(--muted);
+  }
+
+  .log-line.ok { color: var(--online); }
+  .log-line.err { color: var(--offline); }
+  .log-line.info { color: var(--accent2); }
+
+  /* Tabs */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--surface2);
+    border-radius: 10px;
+    padding: 4px;
+    width: fit-content;
+    margin-bottom: 24px;
+  }
+
+  .tab {
+    padding: 7px 16px;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--muted);
+    transition: all 0.15s;
+    user-select: none;
+  }
+
+  .tab.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+  .tab:hover:not(.active) { color: var(--text); }
+
+  /* Page visibility */
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* Add button glow ring */
+  .btn-primary::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    z-index: -1;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .btn-primary { position: relative; }
+  .btn-primary:hover::before { opacity: 1; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* MCP endpoint banner */
+  .endpoint-banner {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 28px;
+  }
+
+  .endpoint-label {
+    font-size: 11px;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .endpoint-url {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--accent);
+    margin-top: 2px;
+  }
+
+  .copy-btn {
+    background: rgba(0,229,160,0.1);
+    border: 1px solid rgba(0,229,160,0.2);
+    color: var(--accent);
+    font-size: 11px;
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .copy-btn:hover { background: rgba(0,229,160,0.2); }
+
+  /* Transport badge */
+  .transport-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+
+  .transport-badge.sse { background: rgba(124,106,255,0.15); color: var(--accent2); }
+  .transport-badge.stdio { background: rgba(255,107,74,0.15); color: var(--accent3); }
+  .transport-badge.http { background: rgba(0,229,160,0.12); color: var(--accent); }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .server-card, .agent-card, .stat-card {
+    animation: fadeIn 0.3s ease both;
+  }
+
+  .server-card:nth-child(2) { animation-delay: 0.05s; }
+  .server-card:nth-child(3) { animation-delay: 0.1s; }
+  .server-card:nth-child(4) { animation-delay: 0.15s; }
+</style>
+</head>
+<body>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-mark">
+        <div class="logo-icon">M</div>
+        <div>
+          <div class="logo-text">MCP Station</div>
+          <div class="logo-sub">TRUENAS · FANGTOOTH</div>
+        </div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-section">Manage</div>
+      <div class="nav-item active" onclick="showPage('dashboard', this)">
+        <span class="icon">⬡</span> Dashboard
+      </div>
+      <div class="nav-item" onclick="showPage('servers', this)">
+        <span class="icon">⚙</span> MCP Servers
+        <span class="nav-badge">4</span>
+      </div>
+      <div class="nav-item" onclick="showPage('agents', this)">
+        <span class="icon">✦</span> Agents
+        <span class="nav-badge">2</span>
+      </div>
+      <div class="nav-item" onclick="showPage('marketplace', this)">
+        <span class="icon">◈</span> Marketplace
+      </div>
+
+      <div class="nav-section">System</div>
+      <div class="nav-item" onclick="showPage('logs', this)">
+        <span class="icon">≡</span> Logs
+      </div>
+      <div class="nav-item" onclick="showPage('settings', this)">
+        <span class="icon">◎</span> Settings
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="server-status">
+        <div class="status-dot"></div>
+        <span>MCP host running</span>
+      </div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);margin-top:4px;">v0.4.1 · port 3000</div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+
+    <!-- DASHBOARD -->
+    <div id="page-dashboard" class="page active">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Dashboard</div>
+          <div class="page-subtitle">MCP Station overview — TrueNAS Fangtooth</div>
+        </div>
+        <button class="btn btn-primary" onclick="openModal('add-server')">＋ Add Server</button>
+      </div>
+
+      <div class="endpoint-banner">
+        <div>
+          <div class="endpoint-label">MCP SSE Endpoint</div>
+          <div class="endpoint-url">http://truenas.local:3000/mcp/sse</div>
+        </div>
+        <button class="copy-btn" onclick="this.textContent='Copied!';setTimeout(()=>this.textContent='Copy URL',1500)">Copy URL</button>
+      </div>
+
+      <div class="stats-row">
+        <div class="stat-card" style="--accent-color:var(--accent)">
+          <div class="stat-label">Servers Active</div>
+          <div class="stat-value" id="stat-servers">—</div>
+          <div class="stat-desc" id="stat-total-desc">of <span id="stat-total">—</span> registered</div>
+        </div>
+        <div class="stat-card" style="--accent-color:var(--accent2)">
+          <div class="stat-label">Total Tools</div>
+          <div class="stat-value">—</div>
+          <div class="stat-desc">exposed via MCP</div>
+        </div>
+        <div class="stat-card" style="--accent-color:var(--accent3)">
+          <div class="stat-label">Agents</div>
+          <div class="stat-value" id="stat-agents">—</div>
+          <div class="stat-desc">server compositions</div>
+        </div>
+        <div class="stat-card" style="--accent-color:var(--warn)">
+          <div class="stat-label">Calls Today</div>
+          <div class="stat-value">—</div>
+          <div class="stat-desc">tool invocations</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <div class="section-title">Active Servers</div>
+          <button class="btn btn-ghost" onclick="showPage('servers')" style="font-size:12px;padding:7px 14px;">View all →</button>
+        </div>
+        <div class="cards-grid" id="dashboard-cards"></div>
+      </div>
+    </div>
+
+    <!-- SERVERS -->
+    <div id="page-servers" class="page">
+      <div class="page-header">
+        <div>
+          <div class="page-title">MCP Servers</div>
+          <div class="page-subtitle">Registered skill servers available to agents</div>
+        </div>
+        <button class="btn btn-primary" onclick="openModal('add-server')">＋ Add Server</button>
+      </div>
+
+      <div class="tabs">
+        <div class="tab active">All</div>
+        <div class="tab">Running</div>
+        <div class="tab">Stopped</div>
+      </div>
+
+      <div class="cards-grid" id="servers-cards"></div>
+    </div>
+
+    <!-- AGENTS -->
+    <div id="page-agents" class="page">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Agents</div>
+          <div class="page-subtitle">Compose sets of MCP servers into named agents</div>
+        </div>
+        <button class="btn btn-primary" onclick="openModal('add-agent')">＋ New Agent</button>
+      </div>
+      <div class="cards-grid" id="agents-cards"></div>
+    </div>
+
+    <!-- MARKETPLACE -->
+    <div id="page-marketplace" class="page">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Marketplace</div>
+          <div class="page-subtitle">Discover and install community MCP servers</div>
+        </div>
+      </div>
+      <div class="cards-grid" id="market-cards"></div>
+    </div>
+
+    <!-- LOGS -->
+    <div id="page-logs" class="page">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Logs</div>
+          <div class="page-subtitle">Live output from MCP host and servers</div>
+        </div>
+        <button class="btn btn-ghost" style="font-size:12px;padding:7px 14px;">⬇ Export</button>
+      </div>
+      <div class="log-viewer" style="max-height:500px;">
+        <div class="log-line ok">[2025-02-19 10:42:01] [host] MCP Station started on :3000</div>
+        <div class="log-line info">[2025-02-19 10:42:02] [filesystem] Server initialized · 6 tools registered</div>
+        <div class="log-line info">[2025-02-19 10:42:02] [brave-search] Server initialized · 2 tools registered</div>
+        <div class="log-line info">[2025-02-19 10:42:03] [github] Server initialized · 10 tools registered</div>
+        <div class="log-line ok">[2025-02-19 10:42:03] [host] 3 servers healthy</div>
+        <div class="log-line">[2025-02-19 10:43:15] [brave-search] Tool call: brave_web_search {"query":"TrueNAS fangtooth"}</div>
+        <div class="log-line">[2025-02-19 10:43:16] [brave-search] → 200 OK (0.42s)</div>
+        <div class="log-line">[2025-02-19 10:44:01] [filesystem] Tool call: read_file {"path":"/mnt/data/notes.md"}</div>
+        <div class="log-line ok">[2025-02-19 10:44:01] [filesystem] → 200 OK (0.01s)</div>
+        <div class="log-line err">[2025-02-19 10:45:30] [postgres] Connection refused: localhost:5432</div>
+        <div class="log-line err">[2025-02-19 10:45:30] [postgres] Server marked offline</div>
+        <div class="log-line">[2025-02-19 10:50:11] [github] Tool call: list_repos {}</div>
+        <div class="log-line ok">[2025-02-19 10:50:12] [github] → 200 OK (0.78s)</div>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div id="page-settings" class="page">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Settings</div>
+          <div class="page-subtitle">MCP host configuration</div>
+        </div>
+        <button class="btn btn-primary">Save Changes</button>
+      </div>
+      <div style="max-width:520px;display:flex;flex-direction:column;gap:16px;">
+        <div class="form-group">
+          <label class="form-label">Host Port</label>
+          <input class="form-input" value="3000" />
+          <div class="form-hint">Port the MCP SSE/HTTP server listens on</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Auth Token</label>
+          <input class="form-input" type="password" value="sk-mcp-••••••••••••" />
+          <div class="form-hint">Bearer token required by MCP clients</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Default Transport</label>
+          <select class="form-select">
+            <option>SSE (Server-Sent Events)</option>
+            <option>HTTP Streamable</option>
+            <option>stdio (local only)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Data Volume Path</label>
+          <input class="form-input" value="/mnt/data/mcp" />
+          <div class="form-hint">Where server configs and state are persisted</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Add Server Modal -->
+<div class="modal-overlay" id="modal-add-server">
+  <div class="modal">
+    <div class="modal-title">Add MCP Server</div>
+    <div class="modal-sub">Register a new skill server with the MCP host</div>
+
+    <div class="form-group">
+      <label class="form-label">Display Name</label>
+      <input id="new-server-name" class="form-input" placeholder="e.g. Filesystem, GitHub, Postgres..." />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Server Type</label>
+      <select class="form-select" id="server-type-select" onchange="updateTypeHint()">
+        <option value="npm">NPM package</option>
+        <option value="docker">Docker image</option>
+        <option value="local">Local binary / script</option>
+        <option value="remote">Remote SSE URL</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label" id="cmd-label">Package / Command</label>
+      <input class="form-input" id="cmd-input" placeholder="@modelcontextprotocol/server-filesystem" />
+      <div class="form-hint" id="cmd-hint">e.g. @modelcontextprotocol/server-brave-search</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Arguments / Env (JSON)</label>
+      <textarea id="new-env" class="form-textarea" placeholder='{"BRAVE_API_KEY": "sk-..."}'>
+</textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Transport</label>
+      <select id="new-transport" class="form-select">
+        <option value="stdio">stdio</option>
+        <option value="sse">SSE</option>
+        <option value="http">HTTP Streamable</option>
+      </select>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('add-server')">Cancel</button>
+      <button class="btn btn-primary" onclick="addServer()">＋ Add Server</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Agent Modal -->
+<div class="modal-overlay" id="modal-add-agent">
+  <div class="modal">
+    <div class="modal-title">New Agent</div>
+    <div class="modal-sub">Compose a named agent from one or more MCP servers</div>
+
+    <div class="form-group">
+      <label class="form-label">Agent Name</label>
+      <input id="new-agent-name" class="form-input" placeholder="e.g. DevOps Agent, Research Assistant..." />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Description</label>
+      <textarea id="new-agent-desc" class="form-textarea" placeholder="What does this agent do?"></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Servers (select all that apply)</label>
+      <div id="server-checkboxes" style="display:flex;flex-direction:column;gap:8px;"></div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('add-agent')">Cancel</button>
+      <button class="btn btn-primary" onclick="addAgent()">Create Agent</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Live API state ────────────────────────────────────────────────────────────
+let servers = [];
+let agents = [];
+
+const marketplace = [
+  { name: 'Slack', icon: '💬', desc: 'Send messages, search channels, and manage Slack from any MCP client.', type: 'npm', command: '@modelcontextprotocol/server-slack', tools: 8 },
+  { name: 'Obsidian', icon: '🪨', desc: 'Read and write to your local Obsidian vault. Full note graph access.', type: 'npm', command: 'mcp-obsidian', tools: 5 },
+  { name: 'Puppeteer', icon: '🎭', desc: 'Headless browser automation — screenshot pages, fill forms, extract content.', type: 'docker', command: 'ghcr.io/modelcontextprotocol/puppeteer', tools: 6 },
+  { name: 'Linear', icon: '▲', desc: 'Project management, issue tracking, and sprint planning through Linear.', type: 'npm', command: '@linear/mcp-server', tools: 9 },
+  { name: 'Brave Search', icon: '🔍', desc: 'Web and local search via the Brave Search API.', type: 'npm', command: '@modelcontextprotocol/server-brave-search', tools: 2 },
+  { name: 'GitHub', icon: '🐙', desc: 'Full GitHub API integration. Manage repos, issues, PRs, and code.', type: 'docker', command: 'ghcr.io/github/github-mcp-server', tools: 10 },
+  { name: 'PostgreSQL', icon: '🗃', desc: 'Read-only SQL query access to a PostgreSQL database.', type: 'npm', command: '@modelcontextprotocol/server-postgres', tools: 3 },
+  { name: 'Filesystem', icon: '📁', desc: 'Secure file operations with configurable access controls.', type: 'npm', command: '@modelcontextprotocol/server-filesystem', tools: 6 },
+];
+
+// ── API helpers ───────────────────────────────────────────────────────────────
+const api = {
+  async get(path) { const r = await fetch(path); return r.json(); },
+  async post(path, body) { const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); return r.json(); },
+  async patch(path, body) { const r = await fetch(path, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); return r.json(); },
+  async delete(path) { await fetch(path, { method:'DELETE' }); },
+};
+
+// ── SSE live updates ──────────────────────────────────────────────────────────
+function connectSSE() {
+  const es = new EventSource('/api/events');
+  es.addEventListener('status', e => {
+    const { serverId, status } = JSON.parse(e.data);
+    const s = servers.find(x => x.id === serverId);
+    if (s) { s.status = status; renderAll(); }
+  });
+  es.addEventListener('log', e => {
+    const { serverId, ts, line } = JSON.parse(e.data);
+    const logEl = document.getElementById('log-' + serverId);
+    if (logEl) logEl.insertAdjacentHTML('beforeend', `<div>${ts.slice(11,19)} ${line}</div>`);
+  });
+  es.onerror = () => setTimeout(connectSSE, 3000);
+}
+
+// ── Load from API ─────────────────────────────────────────────────────────────
+async function loadData() {
+  [servers, agents] = await Promise.all([api.get('/api/servers'), api.get('/api/agents')]);
+  renderAll();
+}
+
+function renderAll() {
+  const running = servers.filter(s => s.status === 'running');
+  document.getElementById('stat-servers').textContent = running.length;
+  document.getElementById('stat-total').textContent = servers.length;
+  document.getElementById('stat-agents').textContent = agents.length;
+  document.getElementById('dashboard-cards').innerHTML = running.map(s => renderCard(s)).join('') || '<div style="color:var(--muted);font-size:13px;padding:20px 0">No servers running. Add one to get started.</div>';
+  document.getElementById('servers-cards').innerHTML = servers.map(s => renderCard(s)).join('') || '<div style="color:var(--muted);font-size:13px;padding:20px 0">No servers yet. Click "Add Server" to register one.</div>';
+  document.getElementById('agents-cards').innerHTML = agents.map(a => renderAgentCard(a)).join('') || '<div style="color:var(--muted);font-size:13px;padding:20px 0">No agents yet. Create one to compose servers together.</div>';
+  document.getElementById('market-cards').innerHTML = marketplace.map(m => renderMarketCard(m)).join('');
+  // Server checkboxes in agent modal
+  document.getElementById('server-checkboxes').innerHTML = servers.map(s => `
+    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg)">
+      <input type="checkbox" value="${s.id}" style="accent-color:var(--accent)" />
+      <span>${s.icon || '⚙'} ${s.name}</span>
+      <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);margin-left:auto">${(s.tools||[]).length} tools</span>
+    </label>
+  `).join('');
+}
+
+function renderCard(s) {
+  const statusLabel = { running: '● online', stopped: '● offline', starting: '◑ starting', error: '✕ error' };
+  const transportClass = { stdio: 'stdio', sse: 'sse', http: 'http', remote: 'sse' };
+  const iconBgMap = { npm: 'rgba(0,229,160,0.12)', docker: 'rgba(124,106,255,0.12)', local: 'rgba(255,107,74,0.12)', remote: 'rgba(255,170,0,0.12)' };
+  const transport = s.transport || 'stdio';
+  return `
+  <div class="server-card">
+    <div class="card-top">
+      <div class="card-icon-wrap">
+        <div class="card-icon" style="background:${iconBgMap[s.type]||'rgba(90,96,114,0.15)'}">${s.icon || '⚙'}</div>
+        <div>
+          <div class="card-name">${s.name} <span class="transport-badge ${transportClass[transport]||'stdio'}">${transport}</span></div>
+          <div class="card-type">${s.type || 'npm'}</div>
+        </div>
+      </div>
+      <div class="card-status ${s.status||'stopped'}">${statusLabel[s.status||'stopped']||'● offline'}</div>
+    </div>
+    <div class="card-desc">${s.desc || s.command || ''}</div>
+    <div class="card-tools">${(s.tools||[]).map(t=>`<span class="tool-tag">${t}</span>`).join('')}</div>
+    <div class="card-footer">
+      <div class="card-meta">${s.type} · ${s.command || ''}</div>
+      <div class="card-actions">
+        ${(s.status === 'running' || s.status === 'starting')
+          ? `<button class="icon-btn stop" title="Stop" onclick="stopServer('${s.id}')">■</button>`
+          : `<button class="icon-btn start" title="Start" onclick="startServerAction('${s.id}')">▶</button>`}
+        <button class="icon-btn" title="Delete" onclick="deleteServer('${s.id}')">✕</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderAgentCard(a) {
+  const serverDetails = (a.serverIds || []).map(id => servers.find(s => s.id === id)).filter(Boolean);
+  return `
+  <div class="agent-card">
+    <div class="agent-name">✦ ${a.name}</div>
+    <div class="agent-desc">${a.desc || ''}</div>
+    <div class="agent-servers">${serverDetails.map(s=>`<span class="server-pill">${s.icon||'⚙'} ${s.name}</span>`).join('')}</div>
+    <div style="display:flex;gap:10px;align-items:center;justify-content:space-between;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent)">/api/agents/${a.id}</div>
+      <div style="display:flex;gap:6px">
+        <button class="icon-btn stop" title="Delete" onclick="deleteAgent('${a.id}')">✕</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderMarketCard(m) {
+  return `
+  <div class="server-card" style="cursor:default">
+    <div class="card-top">
+      <div class="card-icon-wrap">
+        <div class="card-icon" style="background:var(--surface2);font-size:22px">${m.icon}</div>
+        <div>
+          <div class="card-name">${m.name}</div>
+          <div class="card-type">${m.type} · ${m.tools} tools</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-desc">${m.desc}</div>
+    <div class="card-footer">
+      <div></div>
+      <button class="btn btn-primary" style="font-size:12px;padding:7px 14px;" onclick="installMarket(${JSON.stringify(m).replace(/"/g,'&quot;')})">Install</button>
+    </div>
+  </div>`;
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+async function startServerAction(id) {
+  await api.post(`/api/servers/${id}/start`);
+  await loadData();
+}
+
+async function stopServer(id) {
+  await api.post(`/api/servers/${id}/stop`);
+  await loadData();
+}
+
+async function deleteServer(id) {
+  if (!confirm('Remove this server?')) return;
+  await api.delete(`/api/servers/${id}`);
+  await loadData();
+}
+
+async function deleteAgent(id) {
+  if (!confirm('Delete this agent?')) return;
+  await api.delete(`/api/agents/${id}`);
+  await loadData();
+}
+
+async function addServer() {
+  const name = document.getElementById('new-server-name').value.trim();
+  const type = document.getElementById('server-type-select').value;
+  const command = document.getElementById('cmd-input').value.trim();
+  const transport = document.getElementById('new-transport').value;
+  let env = {};
+  try { env = JSON.parse(document.getElementById('new-env').value || '{}'); } catch(e) {}
+  if (!name || !command) return alert('Name and command are required');
+  await api.post('/api/servers', { name, type, command, transport, env });
+  closeModal('add-server');
+  await loadData();
+}
+
+async function addAgent() {
+  const name = document.getElementById('new-agent-name').value.trim();
+  const desc = document.getElementById('new-agent-desc').value.trim();
+  const serverIds = [...document.querySelectorAll('#server-checkboxes input:checked')].map(el => el.value);
+  if (!name) return alert('Name is required');
+  await api.post('/api/agents', { name, desc, serverIds });
+  closeModal('add-agent');
+  await loadData();
+}
+
+async function installMarket(m) {
+  await api.post('/api/servers', { name: m.name, icon: m.icon, type: m.type, command: m.command, transport: 'stdio', desc: m.desc, tools: [] });
+  showPage('servers');
+  await loadData();
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+loadData();
+connectSSE();
+
+function showPage(name, el) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  if (el) el.classList.add('active');
+}
+
+function openModal(name) {
+  document.getElementById('modal-'+name).classList.add('open');
+}
+
+function closeModal(name) {
+  document.getElementById('modal-'+name).classList.remove('open');
+}
+
+document.querySelectorAll('.modal-overlay').forEach(m=>{
+  m.addEventListener('click', e=>{ if(e.target===m) m.classList.remove('open'); });
+});
+
+function updateTypeHint() {
+  const type = document.getElementById('server-type-select').value;
+  const hints = {
+    npm: { label: 'Package Name', placeholder: '@modelcontextprotocol/server-filesystem', hint: 'npm package will be run with npx' },
+    docker: { label: 'Image', placeholder: 'ghcr.io/github/github-mcp-server', hint: 'Docker image to pull and run' },
+    local: { label: 'Command', placeholder: '/usr/local/bin/my-mcp-server', hint: 'Full path to local binary or script' },
+    remote: { label: 'SSE URL', placeholder: 'http://other-host:4000/sse', hint: 'Remote MCP server SSE endpoint' },
+  };
+  const h = hints[type];
+  document.getElementById('cmd-label').textContent = h.label;
+  document.getElementById('cmd-input').placeholder = h.placeholder;
+  document.getElementById('cmd-hint').textContent = h.hint;
+}
+
+function addServer() {
+  closeModal('add-server');
+}
+
+init();
+</script>
+</body>
+</html>

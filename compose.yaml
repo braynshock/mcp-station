@@ -1,0 +1,31 @@
+name: mcp-station
+
+services:
+  host:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mcp-station-host
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - ${DATA_PATH:-/mnt/data/mcp-station}:/data
+    environment:
+      - NODE_ENV=production
+      - DATA_DIR=/data
+      - AUTH_TOKEN=${AUTH_TOKEN:-changeme}
+      - PORT=3000
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Optional: run the official filesystem MCP server as a sidecar
+  # filesystem:
+  #   image: node:22-alpine
+  #   command: npx -y @modelcontextprotocol/server-filesystem /data/files
+  #   volumes:
+  #     - ${FILES_PATH:-/mnt/data/files}:/data/files:ro
+  #   restart: unless-stopped

@@ -1,0 +1,18 @@
+{
+  "servers": [
+    {
+      "id": "example-filesystem",
+      "name": "Filesystem",
+      "icon": "📁",
+      "type": "npm",
+      "command": "@modelcontextprotocol/server-filesystem",
+      "args": ["/data/files"],
+      "transport": "stdio",
+      "env": {},
+      "desc": "Read/write local filesystem access.",
+      "tools": ["read_file", "write_file", "list_directory", "search_files"],
+      "enabled": true
+    }
+  ],
+  "agents": []
+}

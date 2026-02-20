@@ -1,0 +1,19 @@
+{
+  "name": "mcp-station-host",
+  "version": "0.1.0",
+  "description": "Self-hosted MCP server manager for TrueNAS Fangtooth",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "express-sse": "^0.5.1",
+    "uuid": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
