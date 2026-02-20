@@ -40,8 +40,8 @@ function saveConfig(cfg) {
 let config = loadConfig();
 
 // ─── Process registry ─────────────────────────────────────────────────────────
-const processes = new Map(); // id -> { proc, logs, status, restartCount, restartTimer }
-const sseClients = new Set(); // connected SSE clients
+const processes = new Map(); // id -> { proc, logs, status, restartCount, restartTimer, pendingRequests, nextId, stdoutBuf, initialized }
+const sseClients = new Set(); // connected UI SSE clients
 
 const MAX_RESTARTS = 5;
 const RESTART_DELAYS = [5000, 10000, 20000, 40000, 60000]; // exponential backoff (ms)
@@ -63,6 +63,57 @@ function appendLog(serverId, line) {
   }
 }
 
+// ─── MCP JSON-RPC over stdio ───────────────────────────────────────────────────
+
+// Global tool-routing map: toolName -> serverId (rebuilt on demand)
+const mcpToolMap = new Map();
+
+/**
+ * Send a JSON-RPC request to a running stdio MCP server and await its response.
+ */
+function mcpRequest(serverId, method, params, timeoutMs = 30000) {
+  const entry = processes.get(serverId);
+  if (!entry?.proc) return Promise.reject(new Error('Server not running'));
+  const id = entry.nextId++;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      entry.pendingRequests.delete(id);
+      reject(new Error(`MCP timeout waiting for ${method}`));
+    }, timeoutMs);
+    entry.pendingRequests.set(id, {
+      resolve: (v) => { clearTimeout(timer); resolve(v); },
+      reject:  (e) => { clearTimeout(timer); reject(e);  },
+    });
+    entry.proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+  });
+}
+
+/**
+ * Perform the MCP initialize handshake with a server and cache its tool list.
+ */
+async function initializeMcpServer(serverId) {
+  const entry = processes.get(serverId);
+  if (!entry || entry.initialized) return;
+  try {
+    await mcpRequest(serverId, 'initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'mcp-station', version: '0.1.0' },
+    });
+    // Send initialized notification (no response expected)
+    entry.proc.stdin.write(
+      JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n'
+    );
+    entry.initialized = true;
+    // Eagerly populate the global tool map
+    const r = await mcpRequest(serverId, 'tools/list', {});
+    for (const t of r?.tools ?? []) mcpToolMap.set(t.name, serverId);
+    appendLog(serverId, `[station] MCP ready — ${r?.tools?.length ?? 0} tool(s) registered`);
+  } catch (err) {
+    appendLog(serverId, `[station] MCP init failed: ${err.message}`);
+  }
+}
+
 // ─── Server lifecycle ─────────────────────────────────────────────────────────
 function buildCommand(server) {
   switch (server.type) {
@@ -80,7 +131,10 @@ function buildCommand(server) {
 function startServer(server) {
   if (server.transport === 'remote') {
     // Remote SSE — just mark as connected, no local process
-    processes.set(server.id, { proc: null, logs: [], status: 'running' });
+    processes.set(server.id, {
+      proc: null, logs: [], status: 'running',
+      pendingRequests: new Map(), nextId: 1, stdoutBuf: '', initialized: false,
+    });
     broadcast('status', { serverId: server.id, status: 'running' });
     return;
   }
@@ -90,9 +144,38 @@ function startServer(server) {
 
   const proc = spawn(cmd, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
 
-  processes.set(server.id, { proc, logs: [], status: 'starting' });
+  processes.set(server.id, {
+    proc, logs: [], status: 'starting',
+    pendingRequests: new Map(), nextId: 1, stdoutBuf: '', initialized: false,
+    restartCount: 0, restartTimer: null,
+  });
 
-  proc.stdout.on('data', (d) => appendLog(server.id, d.toString().trimEnd()));
+  // ── Stdout: try to parse JSON-RPC first, fall back to logging ──────────────
+  proc.stdout.on('data', (d) => {
+    const entry = processes.get(server.id);
+    if (!entry) return;
+    entry.stdoutBuf += d.toString();
+    const lines = entry.stdoutBuf.split('\n');
+    entry.stdoutBuf = lines.pop(); // keep incomplete trailing fragment
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line) continue;
+      let json = null;
+      try { json = JSON.parse(line); } catch (_) {}
+      if (json?.jsonrpc && json.id != null) {
+        const cb = entry.pendingRequests.get(json.id);
+        if (cb) {
+          entry.pendingRequests.delete(json.id);
+          json.error
+            ? cb.reject(Object.assign(new Error(json.error.message ?? 'MCP error'), json.error))
+            : cb.resolve(json.result);
+          continue; // don't log internal JSON-RPC responses
+        }
+      }
+      appendLog(server.id, raw);
+    }
+  });
+
   proc.stderr.on('data', (d) => appendLog(server.id, d.toString().trimEnd()));
 
   proc.on('spawn', () => {
@@ -100,6 +183,8 @@ function startServer(server) {
     if (entry) entry.status = 'running';
     broadcast('status', { serverId: server.id, status: 'running' });
     appendLog(server.id, `[station] Process started (pid ${proc.pid})`);
+    // Start MCP handshake in the background; don't block startup
+    initializeMcpServer(server.id).catch(() => {});
   });
 
   proc.on('close', (code) => {
@@ -107,6 +192,14 @@ function startServer(server) {
     if (!entry) return;
     entry.status = 'stopped';
     entry.proc = null;
+    entry.initialized = false;
+    // Reject any outstanding MCP requests
+    for (const [, cb] of entry.pendingRequests) cb.reject(new Error('Server stopped'));
+    entry.pendingRequests.clear();
+    // Remove this server's tools from the global routing map
+    for (const [toolName, sid] of mcpToolMap) {
+      if (sid === server.id) mcpToolMap.delete(toolName);
+    }
     broadcast('status', { serverId: server.id, status: 'stopped', code });
     appendLog(server.id, `[station] Process exited with code ${code}`);
 
@@ -152,6 +245,14 @@ function stopServer(serverId) {
     entry.restartTimer = null;
   }
   entry.restartCount = 0;
+  // Reject any outstanding MCP requests
+  for (const [, cb] of (entry.pendingRequests ?? new Map())) cb.reject(new Error('Server stopped'));
+  entry.pendingRequests?.clear();
+  entry.initialized = false;
+  // Remove tools from global routing map
+  for (const [toolName, sid] of mcpToolMap) {
+    if (sid === serverId) mcpToolMap.delete(toolName);
+  }
   if (entry.proc) {
     entry.proc.kill('SIGTERM');
   }
@@ -187,7 +288,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', version: '0.1.0', servers: config.servers.length });
 });
 
-// ─── SSE stream (live events) ─────────────────────────────────────────────────
+// ─── SSE stream (live UI events) ──────────────────────────────────────────────
 app.get('/api/events', requireAuth, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -341,12 +442,142 @@ app.get('/api/marketplace', requireAuth, async (req, res) => {
   }
 });
 
+// ─── MCP SSE transport (for LiteLLM and other MCP clients) ───────────────────
+//
+// Implements the MCP SSE transport spec:
+//   GET  /mcp/sse          → open SSE stream; server sends "endpoint" event
+//   POST /mcp/messages     → client sends JSON-RPC; responses arrive via SSE
+//
+// This is a multiplexing gateway: all running stdio-based servers are
+// aggregated behind a single endpoint.
+
+const mcpSessions = new Map(); // sessionId -> SSE response object
+
+/**
+ * Collect tools from all running stdio servers.
+ * Updates the global mcpToolMap and returns the aggregated tool list.
+ */
+async function collectAllTools() {
+  const tools = [];
+  for (const server of config.servers) {
+    if (server.transport === 'remote') continue;
+    const entry = processes.get(server.id);
+    if (!entry || entry.status !== 'running') continue;
+    try {
+      if (!entry.initialized) await initializeMcpServer(server.id);
+      const r = await mcpRequest(server.id, 'tools/list', {});
+      for (const t of r?.tools ?? []) {
+        mcpToolMap.set(t.name, server.id);
+        tools.push(t);
+      }
+    } catch (err) {
+      console.error(`[mcp] tools/list failed for server ${server.id}:`, err.message);
+    }
+  }
+  return tools;
+}
+
+// GET /mcp/sse — establish SSE session, reply with message endpoint URL
+app.get('/mcp/sse', requireAuth, (req, res) => {
+  const sessionId = randomUUID();
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  mcpSessions.set(sessionId, res);
+
+  // Tell the client where to POST JSON-RPC messages
+  res.write(`event: endpoint\ndata: /mcp/messages?sessionId=${sessionId}\n\n`);
+
+  req.on('close', () => mcpSessions.delete(sessionId));
+});
+
+// POST /mcp/messages — receive JSON-RPC from client, route to subprocess, respond via SSE
+app.post('/mcp/messages', async (req, res) => {
+  const { sessionId } = req.query;
+  const sseRes = mcpSessions.get(sessionId);
+  if (!sseRes) return res.status(404).json({ error: 'Session not found' });
+
+  // Acknowledge receipt immediately (MCP SSE transport requires 202)
+  res.status(202).end();
+
+  const msg = req.body;
+  if (!msg || !msg.method) return;
+
+  const isNotification = msg.id === undefined;
+
+  const send = (payload) =>
+    sseRes.write(`event: message\ndata: ${JSON.stringify(payload)}\n\n`);
+
+  const sendError = (id, code, message) =>
+    send({ jsonrpc: '2.0', id, error: { code, message } });
+
+  try {
+    switch (msg.method) {
+      // ── Notifications (no response) ────────────────────────────────────────
+      case 'notifications/initialized':
+      case 'notifications/cancelled':
+      case 'notifications/progress':
+        return;
+
+      // ── Handshake ──────────────────────────────────────────────────────────
+      case 'initialize':
+        return send({
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: {
+            protocolVersion: msg.params?.protocolVersion ?? '2024-11-05',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'mcp-station', version: '0.1.0' },
+          },
+        });
+
+      // ── Tool discovery ─────────────────────────────────────────────────────
+      case 'tools/list': {
+        const tools = await collectAllTools();
+        return send({ jsonrpc: '2.0', id: msg.id, result: { tools } });
+      }
+
+      // ── Tool invocation ────────────────────────────────────────────────────
+      case 'tools/call': {
+        const toolName = msg.params?.name;
+        let serverId = mcpToolMap.get(toolName);
+
+        // Cache miss → refresh tool map and try once more
+        if (!serverId) {
+          await collectAllTools();
+          serverId = mcpToolMap.get(toolName);
+        }
+        if (!serverId) {
+          return sendError(msg.id, -32601, `Tool not found: ${toolName}`);
+        }
+
+        const result = await mcpRequest(serverId, 'tools/call', msg.params);
+        return send({ jsonrpc: '2.0', id: msg.id, result });
+      }
+
+      // ── Unknown method ─────────────────────────────────────────────────────
+      default:
+        if (!isNotification) {
+          sendError(msg.id, -32601, `Method not found: ${msg.method}`);
+        }
+    }
+  } catch (err) {
+    if (!isNotification) {
+      sendError(msg.id, -32603, err.message);
+    }
+  }
+});
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 const server = createServer(app);
 server.listen(PORT, () => {
   console.log(`[mcp-station] Host running on http://0.0.0.0:${PORT}`);
   console.log(`[mcp-station] Data dir: ${DATA_DIR}`);
   console.log(`[mcp-station] Auth: ${AUTH_TOKEN === 'changeme' ? 'DISABLED (dev mode)' : 'enabled'}`);
+  console.log(`[mcp-station] MCP SSE endpoint: http://0.0.0.0:${PORT}/mcp/sse`);
 });
 
 // Graceful shutdown
