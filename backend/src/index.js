@@ -256,6 +256,55 @@ app.get('/api/stats', requireAuth, (req, res) => {
   });
 });
 
+// ─── Marketplace (proxies MCP Registry) ───────────────────────────────────────
+let _mktCache = null, _mktCacheTs = 0;
+
+app.get('/api/marketplace', requireAuth, async (req, res) => {
+  const { q = '', cursor = '' } = req.query;
+  const now = Date.now();
+  if (!q && !cursor && _mktCache && now - _mktCacheTs < 30 * 60 * 1000) {
+    return res.json(_mktCache);
+  }
+  try {
+    const params = new URLSearchParams({ limit: '50' });
+    if (q) params.set('q', q);
+    if (cursor) params.set('cursor', cursor);
+    const r = await fetch(`https://registry.modelcontextprotocol.io/v0/servers?${params}`);
+    if (!r.ok) throw new Error(`Registry HTTP ${r.status}`);
+    const data = await r.json();
+    const items = (data.servers || []).map(entry => {
+      const s = entry.server;
+      const pkg = s.packages?.[0];
+      const rem = s.remotes?.[0];
+      let type, command;
+      if (pkg) {
+        type = pkg.registryType === 'oci' ? 'docker' : (pkg.registryType || 'npm');
+        command = pkg.identifier;
+      } else if (rem) {
+        type = 'remote';
+        command = rem.url;
+      } else return null;
+      const rawName = s.title || s.name.split('/').pop();
+      return {
+        name: rawName.replace(/-mcp(-server)?$/i, '').replace(/-/g, ' ')
+          .replace(/\b\w/g, c => c.toUpperCase()).trim() || rawName,
+        icon: s.icons?.[0]?.src || null,
+        desc: s.description || '',
+        type,
+        command,
+        githubUrl: s.repository?.url || null,
+        websiteUrl: s.websiteUrl || null,
+      };
+    }).filter(Boolean);
+    const result = { items, nextCursor: data.metadata?.nextCursor || null };
+    if (!q && !cursor) { _mktCache = result; _mktCacheTs = now; }
+    res.json(result);
+  } catch (err) {
+    console.error('[marketplace]', err.message);
+    res.status(503).json({ error: err.message, items: [], nextCursor: null });
+  }
+});
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 const server = createServer(app);
 server.listen(PORT, () => {
