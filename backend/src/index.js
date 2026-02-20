@@ -296,14 +296,13 @@ app.get('/api/stats', requireAuth, (req, res) => {
 let _mktCache = null, _mktCacheTs = 0;
 
 app.get('/api/marketplace', requireAuth, async (req, res) => {
-  const { q = '', cursor = '' } = req.query;
+  const { cursor = '' } = req.query;
   const now = Date.now();
-  if (!q && !cursor && _mktCache && now - _mktCacheTs < 30 * 60 * 1000) {
+  if (!cursor && _mktCache && now - _mktCacheTs < 30 * 60 * 1000) {
     return res.json(_mktCache);
   }
   try {
     const params = new URLSearchParams({ limit: '50' });
-    if (q) params.set('q', q);
     if (cursor) params.set('cursor', cursor);
     const r = await fetch(`https://registry.modelcontextprotocol.io/v0/servers?${params}`);
     if (!r.ok) throw new Error(`Registry HTTP ${r.status}`);
@@ -334,7 +333,7 @@ app.get('/api/marketplace', requireAuth, async (req, res) => {
       };
     }).filter(Boolean);
     const result = { items, nextCursor: data.metadata?.nextCursor || null };
-    if (!q && !cursor) { _mktCache = result; _mktCacheTs = now; }
+    if (!cursor) { _mktCache = result; _mktCacheTs = now; }
     res.json(result);
   } catch (err) {
     console.error('[marketplace]', err.message);

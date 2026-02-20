@@ -1048,6 +1048,8 @@ let _mktAllItems = [];
 let _mktNextCursor = null;
 let _mktLoaded = false;
 let _mktSearchTimer = null;
+let _mktLoadGen = 0;
+let _mktLoadingPages = false;
 
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -1270,6 +1272,8 @@ async function loadMarketplace(reset) {
   const statusEl = document.getElementById('market-status');
   const moreEl = document.getElementById('market-more');
   if (reset) {
+    _mktLoadGen++;
+    _mktLoadingPages = false;
     _mktLoaded = false;
     _mktNextCursor = null;
     _mktAllItems = [];
@@ -1280,8 +1284,6 @@ async function loadMarketplace(reset) {
   statusEl.textContent = 'Loading…';
   try {
     const params = new URLSearchParams();
-    const q = (document.getElementById('market-search').value || '').trim();
-    if (q) params.set('q', q);
     if (!reset && _mktNextCursor) params.set('cursor', _mktNextCursor);
     const data = await api.get('/api/marketplace?' + params);
     const items = data.items || [];
@@ -1289,10 +1291,34 @@ async function loadMarketplace(reset) {
     _mktNextCursor = data.nextCursor || null;
     _mktLoaded = true;
     renderMarketCards(items, !reset);
-    moreEl.style.display = _mktNextCursor ? '' : 'none';
+    moreEl.style.display = 'none';
+    if (_mktNextCursor) loadRemainingMarketPages();
   } catch (err) {
     statusEl.style.display = '';
     statusEl.textContent = 'Failed to load marketplace: ' + err.message;
+  }
+}
+
+async function loadRemainingMarketPages() {
+  if (_mktLoadingPages) return;
+  _mktLoadingPages = true;
+  const gen = _mktLoadGen;
+  try {
+    while (_mktNextCursor && _mktLoadGen === gen) {
+      const params = new URLSearchParams({ cursor: _mktNextCursor });
+      const data = await api.get('/api/marketplace?' + params);
+      if (_mktLoadGen !== gen) break;
+      const items = data.items || [];
+      if (data.error && !items.length) break;
+      _mktNextCursor = data.nextCursor || null;
+      renderMarketCards(items, true);
+      const statusEl = document.getElementById('market-status');
+      if (statusEl) statusEl.style.display = 'none';
+    }
+  } catch (err) {
+    console.error('[marketplace] background load error:', err.message);
+  } finally {
+    if (_mktLoadGen === gen) _mktLoadingPages = false;
   }
 }
 
@@ -1302,7 +1328,10 @@ function loadMoreMarket() {
 
 function onMarketSearch() {
   clearTimeout(_mktSearchTimer);
-  _mktSearchTimer = setTimeout(() => loadMarketplace(true), 350);
+  _mktSearchTimer = setTimeout(() => {
+    renderFilteredMarket();
+    if (_mktNextCursor && !_mktLoadingPages) loadRemainingMarketPages();
+  }, 350);
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
