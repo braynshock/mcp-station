@@ -1199,15 +1199,16 @@ async function loadMarketplace(reset, q) {
     if (q) params.set('q', q);
     if (!reset && _mktNextCursor) params.set('cursor', _mktNextCursor);
     const data = await api.get('/api/marketplace?' + params);
-    if (data.error && !data.items.length) throw new Error(data.error);
+    const items = data.items || [];
+    if (data.error && !items.length) throw new Error(data.error);
     _mktNextCursor = data.nextCursor || null;
     _mktLoaded = true;
     statusEl.style.display = 'none';
-    if (!data.items.length && !marketplaceItems.length) {
+    if (!items.length && !marketplaceItems.length) {
       statusEl.style.display = '';
       statusEl.textContent = q ? 'No servers found for "' + q + '".' : 'No servers available.';
     }
-    renderMarketCards(data.items, !reset);
+    renderMarketCards(items, !reset);
     moreEl.style.display = _mktNextCursor ? '' : 'none';
   } catch (err) {
     statusEl.style.display = '';
