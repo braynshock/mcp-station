@@ -389,6 +389,8 @@
   .card-status.running { color: var(--online); }
   .card-status.stopped { color: var(--offline); }
   .card-status.paused { color: var(--warn); }
+  .card-status.restarting { color: var(--warn); }
+  .card-status.error { color: var(--offline); }
 
   .card-desc {
     font-size: 12px;
@@ -903,22 +905,16 @@
           <div class="page-title">Logs</div>
           <div class="page-subtitle">Live output from MCP host and servers</div>
         </div>
-        <button class="btn btn-ghost" style="font-size:12px;padding:7px 14px;">⬇ Export</button>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <select id="log-filter" class="form-select" style="width:160px;padding:7px 12px;font-size:12px;" onchange="renderAllLogs()">
+            <option value="">All Servers</option>
+          </select>
+          <button class="btn btn-ghost" style="font-size:12px;padding:7px 14px;" onclick="clearLogs()">Clear</button>
+          <button class="btn btn-ghost" style="font-size:12px;padding:7px 14px;" onclick="exportLogs()">⬇ Export</button>
+        </div>
       </div>
-      <div class="log-viewer" style="max-height:500px;">
-        <div class="log-line ok">[2025-02-19 10:42:01] [host] MCP Station started on :3000</div>
-        <div class="log-line info">[2025-02-19 10:42:02] [filesystem] Server initialized · 6 tools registered</div>
-        <div class="log-line info">[2025-02-19 10:42:02] [brave-search] Server initialized · 2 tools registered</div>
-        <div class="log-line info">[2025-02-19 10:42:03] [github] Server initialized · 10 tools registered</div>
-        <div class="log-line ok">[2025-02-19 10:42:03] [host] 3 servers healthy</div>
-        <div class="log-line">[2025-02-19 10:43:15] [brave-search] Tool call: brave_web_search {"query":"TrueNAS fangtooth"}</div>
-        <div class="log-line">[2025-02-19 10:43:16] [brave-search] → 200 OK (0.42s)</div>
-        <div class="log-line">[2025-02-19 10:44:01] [filesystem] Tool call: read_file {"path":"/mnt/data/notes.md"}</div>
-        <div class="log-line ok">[2025-02-19 10:44:01] [filesystem] → 200 OK (0.01s)</div>
-        <div class="log-line err">[2025-02-19 10:45:30] [postgres] Connection refused: localhost:5432</div>
-        <div class="log-line err">[2025-02-19 10:45:30] [postgres] Server marked offline</div>
-        <div class="log-line">[2025-02-19 10:50:11] [github] Tool call: list_repos {}</div>
-        <div class="log-line ok">[2025-02-19 10:50:12] [github] → 200 OK (0.78s)</div>
+      <div class="log-viewer" id="global-log-viewer" style="max-height:500px;">
+        <div style="color:var(--muted);font-size:11px">No logs yet — start a server to see output here.</div>
       </div>
     </div>
 
@@ -1115,8 +1111,20 @@ function connectSSE() {
   });
   es.addEventListener('log', e => {
     const { serverId, ts, line } = JSON.parse(e.data);
+    // Update per-server log widget if present
     const logEl = document.getElementById('log-' + serverId);
-    if (logEl) logEl.insertAdjacentHTML('beforeend', `<div>${ts.slice(11,19)} ${line}</div>`);
+    if (logEl) logEl.insertAdjacentHTML('beforeend', `<div>${ts.slice(11,19)} ${esc(line)}</div>`);
+    // Push into global log buffer and update Logs page if active
+    allLogs.push({ ts, serverId, line });
+    if (allLogs.length > 2000) allLogs.shift();
+    const viewer = document.getElementById('global-log-viewer');
+    if (viewer && document.getElementById('page-logs').classList.contains('active')) {
+      const filterVal = document.getElementById('log-filter')?.value || '';
+      if (!filterVal || filterVal === serverId) {
+        viewer.insertAdjacentHTML('beforeend', formatLogLine({ ts, serverId, line }));
+        viewer.scrollTop = viewer.scrollHeight;
+      }
+    }
   });
   es.onerror = () => setTimeout(connectSSE, 3000);
 }
@@ -1146,7 +1154,7 @@ function renderAll() {
 }
 
 function renderCard(s) {
-  const statusLabel = { running: '● online', stopped: '● offline', starting: '◑ starting', error: '✕ error' };
+  const statusLabel = { running: '● online', stopped: '● offline', starting: '◑ starting', restarting: '◑ restarting', error: '✕ error' };
   const transportClass = { stdio: 'stdio', sse: 'sse', http: 'http', remote: 'sse' };
   const iconBgMap = { npm: 'rgba(0,229,160,0.12)', docker: 'rgba(124,106,255,0.12)', local: 'rgba(255,107,74,0.12)', remote: 'rgba(255,170,0,0.12)' };
   const transport = s.transport || 'stdio';
@@ -1167,7 +1175,7 @@ function renderCard(s) {
     <div class="card-footer">
       <div class="card-meta">${s.type} · ${s.command || ''}</div>
       <div class="card-actions">
-        ${(s.status === 'running' || s.status === 'starting')
+        ${(s.status === 'running' || s.status === 'starting' || s.status === 'restarting')
           ? `<button class="icon-btn stop" title="Stop" onclick="stopServer('${s.id}')">■</button>`
           : `<button class="icon-btn start" title="Start" onclick="startServerAction('${s.id}')">▶</button>`}
         <button class="icon-btn" title="Delete" onclick="deleteServer('${s.id}')">✕</button>
@@ -1339,6 +1347,83 @@ function saveSettings() {
   if (val) { setToken(val); connectSSE(); loadData(); }
 }
 
+// ── Logs page ─────────────────────────────────────────────────────────────────
+let allLogs = []; // { ts, serverId, line }
+
+function logLineClass(line) {
+  const l = line.toLowerCase();
+  if (/connection refused|econnrefused|error|failed|offline|marked offline/.test(l)) return 'err';
+  if (/initialized|started|healthy|200 ok|running|registered|spawned/.test(l)) return 'ok';
+  if (/tool call|→ \d{3}/.test(l)) return 'info';
+  return '';
+}
+
+function formatLogLine(entry) {
+  const name = (servers.find(s => s.id === entry.serverId) || {}).name || entry.serverId;
+  const ts = entry.ts.slice(0, 19).replace('T', ' ');
+  const cls = logLineClass(entry.line);
+  return `<div class="log-line${cls ? ' ' + cls : ''}">[${ts}] [${esc(name)}] ${esc(entry.line)}</div>`;
+}
+
+async function initLogsPage() {
+  const viewer = document.getElementById('global-log-viewer');
+  if (!viewer) return;
+
+  // Populate server filter dropdown
+  const filterEl = document.getElementById('log-filter');
+  if (filterEl) {
+    filterEl.innerHTML = '<option value="">All Servers</option>' +
+      servers.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  }
+
+  // Only fetch from API if buffer is empty (SSE keeps it warm after first load)
+  if (allLogs.length === 0) {
+    viewer.innerHTML = '<div style="color:var(--muted);font-size:11px">Loading…</div>';
+    try {
+      const logArrays = await Promise.all(
+        servers.map(s => api.get(`/api/servers/${s.id}/logs`).then(logs => logs.map(l => ({ ...l, serverId: s.id }))))
+      );
+      allLogs = logArrays.flat().sort((a, b) => a.ts.localeCompare(b.ts));
+    } catch (e) {
+      viewer.innerHTML = `<div class="log-line err">Failed to load logs: ${esc(e.message)}</div>`;
+      return;
+    }
+  }
+
+  renderAllLogs();
+}
+
+function renderAllLogs() {
+  const viewer = document.getElementById('global-log-viewer');
+  if (!viewer) return;
+  const filterVal = document.getElementById('log-filter')?.value || '';
+  const filtered = filterVal ? allLogs.filter(l => l.serverId === filterVal) : allLogs;
+  viewer.innerHTML = filtered.length
+    ? filtered.map(formatLogLine).join('')
+    : '<div style="color:var(--muted);font-size:11px">No logs yet — start a server to see output here.</div>';
+  viewer.scrollTop = viewer.scrollHeight;
+}
+
+function clearLogs() {
+  allLogs = [];
+  renderAllLogs();
+}
+
+function exportLogs() {
+  const filterVal = document.getElementById('log-filter')?.value || '';
+  const filtered = filterVal ? allLogs.filter(l => l.serverId === filterVal) : allLogs;
+  const text = filtered.map(e => {
+    const name = (servers.find(s => s.id === e.serverId) || {}).name || e.serverId;
+    return `[${e.ts.slice(0, 19).replace('T', ' ')}] [${name}] ${e.line}`;
+  }).join('\n');
+  const blob = new Blob([text], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'mcp-station-logs.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 function showPage(name, el) {
@@ -1347,6 +1432,7 @@ function showPage(name, el) {
   document.getElementById('page-'+name).classList.add('active');
   if (el) el.classList.add('active');
   if (name === 'marketplace' && !_mktLoaded) loadMarketplace();
+  if (name === 'logs') initLogsPage();
 }
 
 function openModal(name) {
@@ -1373,10 +1459,6 @@ function updateTypeHint() {
   document.getElementById('cmd-label').textContent = h.label;
   document.getElementById('cmd-input').placeholder = h.placeholder;
   document.getElementById('cmd-hint').textContent = h.hint;
-}
-
-function addServer() {
-  closeModal('add-server');
 }
 
 async function init() {
