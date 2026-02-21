@@ -989,8 +989,12 @@
     </div>
     <div class="form-group">
       <label class="form-label" id="cmd-label">Package / Command</label>
-      <input class="form-input" id="cmd-input" placeholder="@modelcontextprotocol/server-filesystem" />
+      <div style="display:flex;gap:8px;align-items:center">
+        <input class="form-input" id="cmd-input" placeholder="@modelcontextprotocol/server-filesystem" style="flex:1" />
+        <button class="btn btn-ghost" id="npm-lookup-btn" onclick="lookupNpmPackage()" style="white-space:nowrap;display:none">Lookup</button>
+      </div>
       <div class="form-hint" id="cmd-hint">e.g. @modelcontextprotocol/server-brave-search</div>
+      <div id="npm-desc" style="display:none;font-size:12px;color:var(--muted);margin-top:6px;padding:6px 10px;background:var(--surface2,#1e1e2e);border-radius:4px;border:1px solid var(--border,#313244)"></div>
     </div>
     <div class="form-group">
       <label class="form-label">Arguments / Env (JSON)</label>
@@ -1483,6 +1487,12 @@ function showPage(name, el) {
 
 function openModal(name) {
   document.getElementById('modal-'+name).classList.add('open');
+  if (name === 'add-server') {
+    document.getElementById('npm-desc').style.display = 'none';
+    document.getElementById('npm-desc').textContent = '';
+    document.getElementById('npm-lookup-btn').style.display =
+      document.getElementById('server-type-select').value === 'npm' ? '' : 'none';
+  }
 }
 
 function closeModal(name) {
@@ -1505,6 +1515,39 @@ function updateTypeHint() {
   document.getElementById('cmd-label').textContent = h.label;
   document.getElementById('cmd-input').placeholder = h.placeholder;
   document.getElementById('cmd-hint').textContent = h.hint;
+  document.getElementById('npm-lookup-btn').style.display = type === 'npm' ? '' : 'none';
+  document.getElementById('npm-desc').style.display = 'none';
+  document.getElementById('npm-desc').textContent = '';
+}
+
+async function lookupNpmPackage() {
+  const pkg = document.getElementById('cmd-input').value.trim();
+  if (!pkg) return;
+  const btn = document.getElementById('npm-lookup-btn');
+  const descEl = document.getElementById('npm-desc');
+  btn.textContent = '...';
+  btn.disabled = true;
+  try {
+    const r = await fetch(`https://registry.npmjs.org/${pkg}`);
+    if (!r.ok) throw new Error(`Package not found (HTTP ${r.status})`);
+    const data = await r.json();
+    const nameEl = document.getElementById('new-server-name');
+    if (!nameEl.value.trim()) {
+      const raw = (data.name || pkg).replace(/^@[^/]+\//, '');
+      nameEl.value = raw.replace(/-mcp(-server)?$/i, '').replace(/-/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase()).trim() || raw;
+    }
+    const desc = data.description || '';
+    const latest = data['dist-tags']?.latest || '';
+    descEl.textContent = [desc, latest && `Latest: v${latest}`].filter(Boolean).join(' · ');
+    descEl.style.display = '';
+  } catch(e) {
+    descEl.textContent = `Lookup failed: ${e.message}`;
+    descEl.style.display = '';
+  } finally {
+    btn.textContent = 'Lookup';
+    btn.disabled = false;
+  }
 }
 
 async function init() {
