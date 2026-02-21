@@ -812,11 +812,20 @@
       </div>
 
       <div class="endpoint-banner">
-        <div>
-          <div class="endpoint-label">MCP SSE Endpoint</div>
-          <div class="endpoint-url">http://truenas.local:3000/mcp/sse</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <div>
+            <div class="endpoint-label">MCP Streamable HTTP <span style="font-size:10px;background:var(--accent);color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">OpenWebUI</span></div>
+            <div class="endpoint-url" id="endpoint-http">http://truenas.local:3000/mcp</div>
+          </div>
+          <div>
+            <div class="endpoint-label">MCP SSE Endpoint <span style="font-size:10px;background:var(--surface3,#313244);color:var(--muted);padding:1px 5px;border-radius:3px;margin-left:4px">LiteLLM · Claude</span></div>
+            <div class="endpoint-url" id="endpoint-sse">http://truenas.local:3000/mcp/sse</div>
+          </div>
         </div>
-        <button class="copy-btn" onclick="this.textContent='Copied!';setTimeout(()=>this.textContent='Copy URL',1500)">Copy URL</button>
+        <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+          <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('endpoint-http').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+          <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('endpoint-sse').textContent);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)">Copy</button>
+        </div>
       </div>
 
       <div class="stats-row">
