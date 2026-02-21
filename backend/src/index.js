@@ -571,13 +571,126 @@ app.post('/mcp/messages', async (req, res) => {
   }
 });
 
+// ─── MCP Streamable HTTP transport (MCP 2025-03-26, for OpenWebUI etc.) ───────
+//
+// Single endpoint:
+//   POST   /mcp  → JSON-RPC in, direct JSON response out (or 202 for notifications)
+//   GET    /mcp  → optional SSE stream for server-initiated messages
+//   DELETE /mcp  → terminate session
+//
+// Session lifecycle:
+//   1. Client POSTs initialize (no Mcp-Session-Id) → server creates session,
+//      returns Mcp-Session-Id header in response.
+//   2. All subsequent requests include Mcp-Session-Id header.
+//   3. Client DELETEs /mcp to end the session.
+
+const httpSessions = new Map(); // sessionId -> { sseRes: null | Response }
+
+// POST /mcp — main JSON-RPC handler
+app.post('/mcp', requireAuth, async (req, res) => {
+  const msg = req.body;
+  if (!msg || !msg.method) return res.status(400).json({ error: 'Invalid JSON-RPC request' });
+
+  const sessionId = req.headers['mcp-session-id'];
+  const isNotification = msg.id === undefined;
+
+  // initialize — create a new session (no existing session required)
+  if (msg.method === 'initialize') {
+    const newSessionId = randomUUID();
+    httpSessions.set(newSessionId, { sseRes: null });
+    return res
+      .set('Mcp-Session-Id', newSessionId)
+      .json({
+        jsonrpc: '2.0',
+        id: msg.id,
+        result: {
+          protocolVersion: msg.params?.protocolVersion ?? '2025-03-26',
+          capabilities: { tools: {} },
+          serverInfo: { name: 'mcp-station', version: '0.1.0' },
+        },
+      });
+  }
+
+  // All other methods require a valid session
+  if (!sessionId) return res.status(400).json({ error: 'Missing Mcp-Session-Id header' });
+  if (!httpSessions.has(sessionId)) return res.status(404).json({ error: 'Session not found' });
+
+  // Notifications (no id) — acknowledge and return
+  if (isNotification) return res.status(202).end();
+
+  try {
+    switch (msg.method) {
+      case 'tools/list': {
+        const tools = await collectAllTools();
+        return res.json({ jsonrpc: '2.0', id: msg.id, result: { tools } });
+      }
+
+      case 'tools/call': {
+        const toolName = msg.params?.name;
+        let serverId = mcpToolMap.get(toolName);
+        if (!serverId) {
+          await collectAllTools();
+          serverId = mcpToolMap.get(toolName);
+        }
+        if (!serverId) {
+          return res.json({
+            jsonrpc: '2.0', id: msg.id,
+            error: { code: -32601, message: `Tool not found: ${toolName}` },
+          });
+        }
+        const result = await mcpRequest(serverId, 'tools/call', msg.params);
+        return res.json({ jsonrpc: '2.0', id: msg.id, result });
+      }
+
+      default:
+        return res.json({
+          jsonrpc: '2.0', id: msg.id,
+          error: { code: -32601, message: `Method not found: ${msg.method}` },
+        });
+    }
+  } catch (err) {
+    return res.json({
+      jsonrpc: '2.0', id: msg.id,
+      error: { code: -32603, message: err.message },
+    });
+  }
+});
+
+// GET /mcp — optional SSE stream for server-initiated messages
+app.get('/mcp', requireAuth, (req, res) => {
+  const sessionId = req.headers['mcp-session-id'];
+  if (!sessionId || !httpSessions.has(sessionId)) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  res.write(': connected\n\n');
+
+  const session = httpSessions.get(sessionId);
+  session.sseRes = res;
+  req.on('close', () => {
+    if (session.sseRes === res) session.sseRes = null;
+  });
+});
+
+// DELETE /mcp — terminate session
+app.delete('/mcp', requireAuth, (req, res) => {
+  const sessionId = req.headers['mcp-session-id'];
+  if (sessionId) httpSessions.delete(sessionId);
+  res.status(200).end();
+});
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 const server = createServer(app);
 server.listen(PORT, () => {
   console.log(`[mcp-station] Host running on http://0.0.0.0:${PORT}`);
   console.log(`[mcp-station] Data dir: ${DATA_DIR}`);
   console.log(`[mcp-station] Auth: ${AUTH_TOKEN === 'changeme' ? 'DISABLED (dev mode)' : 'enabled'}`);
-  console.log(`[mcp-station] MCP SSE endpoint: http://0.0.0.0:${PORT}/mcp/sse`);
+  console.log(`[mcp-station] MCP SSE endpoint:         http://0.0.0.0:${PORT}/mcp/sse`);
+  console.log(`[mcp-station] MCP Streamable HTTP:      http://0.0.0.0:${PORT}/mcp`);
 });
 
 // Graceful shutdown
