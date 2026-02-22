@@ -1052,6 +1052,63 @@
   </div>
 </div>
 
+<!-- Edit Server Modal -->
+<div class="modal-overlay" id="modal-edit-server">
+  <div class="modal">
+    <div class="modal-title">Edit Server</div>
+    <div class="modal-sub">Update this MCP server's configuration</div>
+    <input type="hidden" id="edit-server-id" />
+
+    <div class="form-group">
+      <label class="form-label">Display Name</label>
+      <input id="edit-server-name" class="form-input" placeholder="e.g. Filesystem, GitHub, Postgres..." />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Icon (emoji)</label>
+      <input id="edit-server-icon" class="form-input" placeholder="e.g. 📁" style="width:100px" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Server Type</label>
+      <select class="form-select" id="edit-server-type" onchange="updateEditTypeHint()">
+        <option value="npm">NPM package</option>
+        <option value="docker">Docker image</option>
+        <option value="local">Local binary / script</option>
+        <option value="remote">Remote SSE URL</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label" id="edit-cmd-label">Package / Command</label>
+      <input class="form-input" id="edit-cmd-input" />
+      <div class="form-hint" id="edit-cmd-hint"></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Arguments (JSON array)</label>
+      <input id="edit-server-args" class="form-input" placeholder='["/path/to/dir"]' />
+      <div class="form-hint">Optional args passed to the server command</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Environment Variables (JSON)</label>
+      <textarea id="edit-server-env" class="form-textarea" placeholder='{"API_KEY": "sk-..."}'></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Transport</label>
+      <select id="edit-server-transport" class="form-select">
+        <option value="stdio">stdio</option>
+        <option value="sse">SSE</option>
+        <option value="http">HTTP Streamable</option>
+      </select>
+    </div>
+    <div style="font-size:11px;color:var(--muted);padding:8px 12px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">
+      Changes take effect on the next start. Restart the server to apply.
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('edit-server')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveServerEdit()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── Live API state ────────────────────────────────────────────────────────────
 let servers = [];
@@ -1200,6 +1257,7 @@ function renderCard(s) {
         ${(s.status === 'running' || s.status === 'starting' || s.status === 'restarting')
           ? `<button class="icon-btn stop" title="Stop" onclick="stopServer('${s.id}')">■</button>`
           : `<button class="icon-btn start" title="Start" onclick="startServerAction('${s.id}')">▶</button>`}
+        <button class="icon-btn" title="Edit config" onclick="editServer('${s.id}')">✎</button>
         <button class="icon-btn" title="Delete" onclick="deleteServer('${s.id}')">✕</button>
       </div>
     </div>
@@ -1367,6 +1425,53 @@ async function deleteServer(id) {
 async function deleteAgent(id) {
   if (!confirm('Delete this agent?')) return;
   await api.delete(`/api/agents/${id}`);
+  await loadData();
+}
+
+function editServer(id) {
+  const s = servers.find(x => x.id === id);
+  if (!s) return;
+  document.getElementById('edit-server-id').value = s.id;
+  document.getElementById('edit-server-name').value = s.name || '';
+  document.getElementById('edit-server-icon').value = s.icon || '';
+  document.getElementById('edit-server-type').value = s.type || 'npm';
+  document.getElementById('edit-cmd-input').value = s.command || '';
+  document.getElementById('edit-server-args').value = s.args && s.args.length ? JSON.stringify(s.args) : '';
+  document.getElementById('edit-server-env').value = s.env && Object.keys(s.env).length ? JSON.stringify(s.env, null, 2) : '';
+  document.getElementById('edit-server-transport').value = s.transport || 'stdio';
+  updateEditTypeHint();
+  document.getElementById('modal-edit-server').classList.add('open');
+}
+
+function updateEditTypeHint() {
+  const type = document.getElementById('edit-server-type').value;
+  const hints = {
+    npm:    { label: 'Package Name',    hint: 'npm package will be run with npx' },
+    docker: { label: 'Image',           hint: 'Docker image to pull and run' },
+    local:  { label: 'Command',         hint: 'Full path to local binary or script' },
+    remote: { label: 'SSE URL',         hint: 'Remote MCP server SSE endpoint' },
+  };
+  const h = hints[type] || hints.npm;
+  document.getElementById('edit-cmd-label').textContent = h.label;
+  document.getElementById('edit-cmd-hint').textContent = h.hint;
+}
+
+async function saveServerEdit() {
+  const id = document.getElementById('edit-server-id').value;
+  const name = document.getElementById('edit-server-name').value.trim();
+  const icon = document.getElementById('edit-server-icon').value.trim();
+  const type = document.getElementById('edit-server-type').value;
+  const command = document.getElementById('edit-cmd-input').value.trim();
+  const transport = document.getElementById('edit-server-transport').value;
+  let args = [];
+  let env = {};
+  try { args = JSON.parse(document.getElementById('edit-server-args').value || '[]'); } catch(_) { args = []; }
+  try { env = JSON.parse(document.getElementById('edit-server-env').value || '{}'); } catch(_) {}
+  if (!name || !command) return alert('Name and command are required');
+  const patch = { name, type, command, transport, args, env };
+  if (icon) patch.icon = icon;
+  await api.patch(`/api/servers/${id}`, patch);
+  closeModal('edit-server');
   await loadData();
 }
 

@@ -203,6 +203,7 @@ function startServer(server) {
   proc.on('close', (code) => {
     const entry = processes.get(server.id);
     if (!entry) return;
+    const wasManualStop = entry.stoppedManually === true;
     entry.status = 'stopped';
     entry.proc = null;
     entry.initialized = false;
@@ -216,9 +217,9 @@ function startServer(server) {
     broadcast('status', { serverId: server.id, status: 'stopped', code });
     appendLog(server.id, `[station] Process exited with code ${code}`);
 
-    // Auto-restart on non-zero exit if server is still enabled
+    // Auto-restart on non-zero exit if server is still enabled and not manually stopped
     const cfg = config.servers.find((s) => s.id === server.id);
-    if (cfg && cfg.enabled !== false && code !== 0) {
+    if (!wasManualStop && cfg && cfg.enabled !== false && code !== 0) {
       const count = entry.restartCount || 0;
       if (count < MAX_RESTARTS) {
         const delay = RESTART_DELAYS[Math.min(count, RESTART_DELAYS.length - 1)];
@@ -258,6 +259,7 @@ function stopServer(serverId) {
     entry.restartTimer = null;
   }
   entry.restartCount = 0;
+  entry.stoppedManually = true;
   // Reject any outstanding MCP requests
   for (const [, cb] of (entry.pendingRequests ?? new Map())) cb.reject(new Error('Server stopped'));
   entry.pendingRequests?.clear();
