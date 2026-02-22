@@ -836,7 +836,7 @@
         </div>
         <div class="stat-card" style="--accent-color:var(--accent2)">
           <div class="stat-label">Total Tools</div>
-          <div class="stat-value">—</div>
+          <div class="stat-value" id="stat-tools">—</div>
           <div class="stat-desc">exposed via MCP</div>
         </div>
         <div class="stat-card" style="--accent-color:var(--accent3)">
@@ -846,7 +846,7 @@
         </div>
         <div class="stat-card" style="--accent-color:var(--warn)">
           <div class="stat-label">Calls Today</div>
-          <div class="stat-value">—</div>
+          <div class="stat-value" id="stat-calls">—</div>
           <div class="stat-desc">tool invocations</div>
         </div>
       </div>
@@ -1113,6 +1113,7 @@
 // ── Live API state ────────────────────────────────────────────────────────────
 let servers = [];
 let agents = [];
+let callsToday = 0;
 let marketplaceItems = [];
 let _mktAllItems = [];
 let _mktNextCursor = null;
@@ -1182,6 +1183,10 @@ function connectSSE() {
     const s = servers.find(x => x.id === serverId);
     if (s) { s.status = status; renderAll(); }
   });
+  es.addEventListener('stats', e => {
+    const data = JSON.parse(e.data);
+    if (data.callsToday !== undefined) { callsToday = data.callsToday; renderAll(); }
+  });
   es.addEventListener('log', e => {
     const { serverId, ts, line } = JSON.parse(e.data);
     // Update per-server log widget if present
@@ -1204,7 +1209,10 @@ function connectSSE() {
 
 // ── Load from API ─────────────────────────────────────────────────────────────
 async function loadData() {
-  [servers, agents] = await Promise.all([api.get('/api/servers'), api.get('/api/agents')]);
+  const [svrs, agts, stats] = await Promise.all([api.get('/api/servers'), api.get('/api/agents'), api.get('/api/stats')]);
+  servers = svrs;
+  agents = agts;
+  callsToday = stats.callsToday ?? 0;
   renderAll();
 }
 
@@ -1213,6 +1221,9 @@ function renderAll() {
   document.getElementById('stat-servers').textContent = running.length;
   document.getElementById('stat-total').textContent = servers.length;
   document.getElementById('stat-agents').textContent = agents.length;
+  const totalTools = servers.reduce((sum, s) => sum + (s.tools?.length || 0), 0);
+  document.getElementById('stat-tools').textContent = totalTools;
+  document.getElementById('stat-calls').textContent = callsToday;
   const serversBadge = document.getElementById('nav-badge-servers');
   serversBadge.textContent = servers.length;
   serversBadge.style.display = servers.length ? '' : 'none';

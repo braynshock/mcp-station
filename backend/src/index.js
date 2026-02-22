@@ -76,6 +76,20 @@ function appendEndpointLog(line) {
   broadcast('log', { serverId: ENDPOINT_LOG_ID, ...log });
 }
 
+// ─── Calls today counter ──────────────────────────────────────────────────────
+let callsToday = 0;
+let callsTodayDate = new Date().toDateString();
+
+function recordToolCall() {
+  const today = new Date().toDateString();
+  if (today !== callsTodayDate) {
+    callsToday = 0;
+    callsTodayDate = today;
+  }
+  callsToday++;
+  broadcast('stats', { callsToday });
+}
+
 // ─── MCP JSON-RPC over stdio ───────────────────────────────────────────────────
 
 // Global tool-routing map: toolName -> serverId (rebuilt on demand)
@@ -404,11 +418,15 @@ app.delete('/api/agents/:id', requireAuth, (req, res) => {
 // ─── Stats API ────────────────────────────────────────────────────────────────
 app.get('/api/stats', requireAuth, (req, res) => {
   const running = [...processes.values()].filter((p) => p.status === 'running').length;
+  const today = new Date().toDateString();
+  const todayCalls = today !== callsTodayDate ? 0 : callsToday;
   res.json({
     totalServers: config.servers.length,
     runningServers: running,
     totalAgents: config.agents.length,
     sseClients: sseClients.size,
+    totalTools: mcpToolMap.size,
+    callsToday: todayCalls,
   });
 });
 
@@ -591,6 +609,7 @@ app.post('/mcp/messages', async (req, res) => {
 
         const result = await mcpRequest(serverId, 'tools/call', msg.params);
         send({ jsonrpc: '2.0', id: msg.id, result });
+        recordToolCall();
         appendEndpointLog(`[mcp/sse] → tools/call ok, session=${shortId}`);
         return;
       }
@@ -701,6 +720,7 @@ app.post('/mcp', requireAuth, async (req, res) => {
         }
         const result = await mcpRequest(serverId, 'tools/call', msg.params);
         res.json({ jsonrpc: '2.0', id: msg.id, result });
+        recordToolCall();
         appendEndpointLog(`[mcp] → tools/call ok, session=${shortId}`);
         return;
       }
