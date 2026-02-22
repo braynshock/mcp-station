@@ -595,6 +595,13 @@ app.post('/mcp/messages', async (req, res) => {
         return;
       }
 
+      // ── Ping ───────────────────────────────────────────────────────────────
+      case 'ping':
+        appendEndpointLog(`[mcp/sse] ← ping, session=${shortId}`);
+        send({ jsonrpc: '2.0', id: msg.id, result: {} });
+        appendEndpointLog(`[mcp/sse] → ping ok, session=${shortId}`);
+        return;
+
       // ── Unknown method ─────────────────────────────────────────────────────
       default:
         appendEndpointLog(`[mcp/sse] ← ${msg.method}, session=${shortId}`);
@@ -695,6 +702,13 @@ app.post('/mcp', requireAuth, async (req, res) => {
         const result = await mcpRequest(serverId, 'tools/call', msg.params);
         res.json({ jsonrpc: '2.0', id: msg.id, result });
         appendEndpointLog(`[mcp] → tools/call ok, session=${shortId}`);
+        return;
+      }
+
+      case 'ping': {
+        appendEndpointLog(`[mcp] ← ping, session=${shortId}`);
+        res.json({ jsonrpc: '2.0', id: msg.id, result: {} });
+        appendEndpointLog(`[mcp] → ping ok, session=${shortId}`);
         return;
       }
 
