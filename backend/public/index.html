@@ -1412,13 +1412,17 @@ let allLogs = []; // { ts, serverId, line }
 function logLineClass(line) {
   const l = line.toLowerCase();
   if (/connection refused|econnrefused|error|failed|offline|marked offline/.test(l)) return 'err';
+  if (/→.*error/.test(l)) return 'err';
   if (/initialized|started|healthy|200 ok|running|registered|spawned/.test(l)) return 'ok';
-  if (/tool call|→ \d{3}/.test(l)) return 'info';
+  if (/→.*ok/.test(l)) return 'ok';
+  if (/tool call|→ \d{3}|← /.test(l)) return 'info';
   return '';
 }
 
 function formatLogLine(entry) {
-  const name = (servers.find(s => s.id === entry.serverId) || {}).name || entry.serverId;
+  const name = entry.serverId === '__endpoint__'
+    ? 'Endpoint'
+    : (servers.find(s => s.id === entry.serverId) || {}).name || entry.serverId;
   const ts = entry.ts.slice(0, 19).replace('T', ' ');
   const cls = logLineClass(entry.line);
   return `<div class="log-line${cls ? ' ' + cls : ''}">[${ts}] [${esc(name)}] ${esc(entry.line)}</div>`;
@@ -1428,10 +1432,11 @@ async function initLogsPage() {
   const viewer = document.getElementById('global-log-viewer');
   if (!viewer) return;
 
-  // Populate server filter dropdown
+  // Populate server filter dropdown (includes endpoint traffic entry)
   const filterEl = document.getElementById('log-filter');
   if (filterEl) {
-    filterEl.innerHTML = '<option value="">All Servers</option>' +
+    filterEl.innerHTML = '<option value="">All Sources</option>' +
+      '<option value="__endpoint__">Endpoint Traffic</option>' +
       servers.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
   }
 
@@ -1439,10 +1444,11 @@ async function initLogsPage() {
   if (allLogs.length === 0) {
     viewer.innerHTML = '<div style="color:var(--muted);font-size:11px">Loading…</div>';
     try {
-      const logArrays = await Promise.all(
-        servers.map(s => api.get(`/api/servers/${s.id}/logs`).then(logs => logs.map(l => ({ ...l, serverId: s.id }))))
-      );
-      allLogs = logArrays.flat().sort((a, b) => a.ts.localeCompare(b.ts));
+      const [endpointLogs, ...serverLogArrays] = await Promise.all([
+        api.get('/api/endpoint-logs').then(logs => logs.map(l => ({ ...l, serverId: '__endpoint__' }))),
+        ...servers.map(s => api.get(`/api/servers/${s.id}/logs`).then(logs => logs.map(l => ({ ...l, serverId: s.id })))),
+      ]);
+      allLogs = [...endpointLogs, ...serverLogArrays.flat()].sort((a, b) => a.ts.localeCompare(b.ts));
     } catch (e) {
       viewer.innerHTML = `<div class="log-line err">Failed to load logs: ${esc(e.message)}</div>`;
       return;

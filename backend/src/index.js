@@ -63,6 +63,19 @@ function appendLog(serverId, line) {
   }
 }
 
+// ─── Endpoint traffic log ─────────────────────────────────────────────────────
+// Captures inbound calls and outbound results for /mcp/sse and /mcp endpoints.
+// Uses a synthetic serverId so the UI can filter it like any other log source.
+const ENDPOINT_LOG_ID = '__endpoint__';
+const endpointLogs = []; // { ts, line }
+
+function appendEndpointLog(line) {
+  const log = { ts: new Date().toISOString(), line };
+  endpointLogs.push(log);
+  if (endpointLogs.length > 500) endpointLogs.shift();
+  broadcast('log', { serverId: ENDPOINT_LOG_ID, ...log });
+}
+
 // ─── MCP JSON-RPC over stdio ───────────────────────────────────────────────────
 
 // Global tool-routing map: toolName -> serverId (rebuilt on demand)
@@ -358,6 +371,10 @@ app.get('/api/servers/:id/logs', requireAuth, (req, res) => {
   res.json(entry?.logs || []);
 });
 
+app.get('/api/endpoint-logs', requireAuth, (req, res) => {
+  res.json(endpointLogs);
+});
+
 // ─── Agents API ───────────────────────────────────────────────────────────────
 app.get('/api/agents', requireAuth, (req, res) => res.json(config.agents));
 
@@ -480,6 +497,7 @@ async function collectAllTools() {
 // GET /mcp/sse — establish SSE session, reply with message endpoint URL
 app.get('/mcp/sse', requireAuth, (req, res) => {
   const sessionId = randomUUID();
+  const shortId = sessionId.slice(0, 8);
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -487,11 +505,15 @@ app.get('/mcp/sse', requireAuth, (req, res) => {
   res.flushHeaders();
 
   mcpSessions.set(sessionId, res);
+  appendEndpointLog(`[mcp/sse] client connected, session=${shortId}`);
 
   // Tell the client where to POST JSON-RPC messages
   res.write(`event: endpoint\ndata: /mcp/messages?sessionId=${sessionId}\n\n`);
 
-  req.on('close', () => mcpSessions.delete(sessionId));
+  req.on('close', () => {
+    mcpSessions.delete(sessionId);
+    appendEndpointLog(`[mcp/sse] client disconnected, session=${shortId}`);
+  });
 });
 
 // POST /mcp/messages — receive JSON-RPC from client, route to subprocess, respond via SSE
@@ -506,6 +528,7 @@ app.post('/mcp/messages', async (req, res) => {
   const msg = req.body;
   if (!msg || !msg.method) return;
 
+  const shortId = sessionId?.slice(0, 8) ?? '?';
   const isNotification = msg.id === undefined;
 
   const send = (payload) =>
@@ -520,29 +543,36 @@ app.post('/mcp/messages', async (req, res) => {
       case 'notifications/initialized':
       case 'notifications/cancelled':
       case 'notifications/progress':
+        appendEndpointLog(`[mcp/sse] ← ${msg.method} (notification), session=${shortId}`);
         return;
 
       // ── Handshake ──────────────────────────────────────────────────────────
-      case 'initialize':
-        return send({
-          jsonrpc: '2.0',
-          id: msg.id,
-          result: {
-            protocolVersion: msg.params?.protocolVersion ?? '2024-11-05',
-            capabilities: { tools: {} },
-            serverInfo: { name: 'mcp-station', version: '0.1.0' },
-          },
-        });
+      case 'initialize': {
+        const clientName = msg.params?.clientInfo?.name ?? 'unknown';
+        appendEndpointLog(`[mcp/sse] ← initialize (client: ${clientName}), session=${shortId}`);
+        const result = {
+          protocolVersion: msg.params?.protocolVersion ?? '2024-11-05',
+          capabilities: { tools: {} },
+          serverInfo: { name: 'mcp-station', version: '0.1.0' },
+        };
+        send({ jsonrpc: '2.0', id: msg.id, result });
+        appendEndpointLog(`[mcp/sse] → initialize ok, session=${shortId}`);
+        return;
+      }
 
       // ── Tool discovery ─────────────────────────────────────────────────────
       case 'tools/list': {
+        appendEndpointLog(`[mcp/sse] ← tools/list, session=${shortId}`);
         const tools = await collectAllTools();
-        return send({ jsonrpc: '2.0', id: msg.id, result: { tools } });
+        send({ jsonrpc: '2.0', id: msg.id, result: { tools } });
+        appendEndpointLog(`[mcp/sse] → tools/list ok (${tools.length} tool${tools.length === 1 ? '' : 's'}), session=${shortId}`);
+        return;
       }
 
       // ── Tool invocation ────────────────────────────────────────────────────
       case 'tools/call': {
         const toolName = msg.params?.name;
+        appendEndpointLog(`[mcp/sse] ← tools/call: ${toolName}, session=${shortId}`);
         let serverId = mcpToolMap.get(toolName);
 
         // Cache miss → refresh tool map and try once more
@@ -551,22 +581,30 @@ app.post('/mcp/messages', async (req, res) => {
           serverId = mcpToolMap.get(toolName);
         }
         if (!serverId) {
-          return sendError(msg.id, -32601, `Tool not found: ${toolName}`);
+          const errMsg = `Tool not found: ${toolName}`;
+          sendError(msg.id, -32601, errMsg);
+          appendEndpointLog(`[mcp/sse] → tools/call error: ${errMsg}, session=${shortId}`);
+          return;
         }
 
         const result = await mcpRequest(serverId, 'tools/call', msg.params);
-        return send({ jsonrpc: '2.0', id: msg.id, result });
+        send({ jsonrpc: '2.0', id: msg.id, result });
+        appendEndpointLog(`[mcp/sse] → tools/call ok, session=${shortId}`);
+        return;
       }
 
       // ── Unknown method ─────────────────────────────────────────────────────
       default:
+        appendEndpointLog(`[mcp/sse] ← ${msg.method}, session=${shortId}`);
         if (!isNotification) {
           sendError(msg.id, -32601, `Method not found: ${msg.method}`);
+          appendEndpointLog(`[mcp/sse] → ${msg.method} error: Method not found, session=${shortId}`);
         }
     }
   } catch (err) {
     if (!isNotification) {
       sendError(msg.id, -32603, err.message);
+      appendEndpointLog(`[mcp/sse] → ${msg.method} error: ${err.message}, session=${shortId}`);
     }
   }
 });
@@ -597,8 +635,11 @@ app.post('/mcp', requireAuth, async (req, res) => {
   // initialize — create a new session (no existing session required)
   if (msg.method === 'initialize') {
     const newSessionId = randomUUID();
+    const shortId = newSessionId.slice(0, 8);
+    const clientName = msg.params?.clientInfo?.name ?? 'unknown';
+    appendEndpointLog(`[mcp] ← initialize (client: ${clientName})`);
     httpSessions.set(newSessionId, { sseRes: null });
-    return res
+    res
       .set('Mcp-Session-Id', newSessionId)
       .json({
         jsonrpc: '2.0',
@@ -609,50 +650,62 @@ app.post('/mcp', requireAuth, async (req, res) => {
           serverInfo: { name: 'mcp-station', version: '0.1.0' },
         },
       });
+    appendEndpointLog(`[mcp] → initialize ok, session=${shortId}`);
+    return;
   }
+
+  const shortId = sessionId?.slice(0, 8) ?? '?';
 
   // All other methods require a valid session
   if (!sessionId) return res.status(400).json({ error: 'Missing Mcp-Session-Id header' });
   if (!httpSessions.has(sessionId)) return res.status(404).json({ error: 'Session not found' });
 
   // Notifications (no id) — acknowledge and return
-  if (isNotification) return res.status(202).end();
+  if (isNotification) {
+    appendEndpointLog(`[mcp] ← ${msg.method} (notification), session=${shortId}`);
+    return res.status(202).end();
+  }
 
   try {
     switch (msg.method) {
       case 'tools/list': {
+        appendEndpointLog(`[mcp] ← tools/list, session=${shortId}`);
         const tools = await collectAllTools();
-        return res.json({ jsonrpc: '2.0', id: msg.id, result: { tools } });
+        res.json({ jsonrpc: '2.0', id: msg.id, result: { tools } });
+        appendEndpointLog(`[mcp] → tools/list ok (${tools.length} tool${tools.length === 1 ? '' : 's'}), session=${shortId}`);
+        return;
       }
 
       case 'tools/call': {
         const toolName = msg.params?.name;
+        appendEndpointLog(`[mcp] ← tools/call: ${toolName}, session=${shortId}`);
         let serverId = mcpToolMap.get(toolName);
         if (!serverId) {
           await collectAllTools();
           serverId = mcpToolMap.get(toolName);
         }
         if (!serverId) {
-          return res.json({
-            jsonrpc: '2.0', id: msg.id,
-            error: { code: -32601, message: `Tool not found: ${toolName}` },
-          });
+          const errMsg = `Tool not found: ${toolName}`;
+          res.json({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: errMsg } });
+          appendEndpointLog(`[mcp] → tools/call error: ${errMsg}, session=${shortId}`);
+          return;
         }
         const result = await mcpRequest(serverId, 'tools/call', msg.params);
-        return res.json({ jsonrpc: '2.0', id: msg.id, result });
+        res.json({ jsonrpc: '2.0', id: msg.id, result });
+        appendEndpointLog(`[mcp] → tools/call ok, session=${shortId}`);
+        return;
       }
 
-      default:
-        return res.json({
-          jsonrpc: '2.0', id: msg.id,
-          error: { code: -32601, message: `Method not found: ${msg.method}` },
-        });
+      default: {
+        appendEndpointLog(`[mcp] ← ${msg.method}, session=${shortId}`);
+        res.json({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: `Method not found: ${msg.method}` } });
+        appendEndpointLog(`[mcp] → ${msg.method} error: Method not found, session=${shortId}`);
+        return;
+      }
     }
   } catch (err) {
-    return res.json({
-      jsonrpc: '2.0', id: msg.id,
-      error: { code: -32603, message: err.message },
-    });
+    res.json({ jsonrpc: '2.0', id: msg.id, error: { code: -32603, message: err.message } });
+    appendEndpointLog(`[mcp] → ${msg.method} error: ${err.message}, session=${shortId}`);
   }
 });
 
@@ -663,6 +716,7 @@ app.get('/mcp', requireAuth, (req, res) => {
     return res.status(404).json({ error: 'Session not found' });
   }
 
+  const shortId = sessionId.slice(0, 8);
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -671,15 +725,20 @@ app.get('/mcp', requireAuth, (req, res) => {
 
   const session = httpSessions.get(sessionId);
   session.sseRes = res;
+  appendEndpointLog(`[mcp] SSE stream opened, session=${shortId}`);
   req.on('close', () => {
     if (session.sseRes === res) session.sseRes = null;
+    appendEndpointLog(`[mcp] SSE stream closed, session=${shortId}`);
   });
 });
 
 // DELETE /mcp — terminate session
 app.delete('/mcp', requireAuth, (req, res) => {
   const sessionId = req.headers['mcp-session-id'];
-  if (sessionId) httpSessions.delete(sessionId);
+  if (sessionId) {
+    appendEndpointLog(`[mcp] session terminated, session=${sessionId.slice(0, 8)}`);
+    httpSessions.delete(sessionId);
+  }
   res.status(200).end();
 });
 
