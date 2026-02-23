@@ -265,6 +265,13 @@
     padding: 20px;
     position: relative;
     overflow: hidden;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  }
+  .stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 24px rgba(0,0,0,0.35);
+    border-color: var(--accent-color, var(--accent));
   }
 
   .stat-card::before {
@@ -776,6 +783,10 @@
         <span class="icon">✦</span> Agents
         <span class="nav-badge" id="nav-badge-agents" style="display:none">0</span>
       </div>
+      <div class="nav-item" onclick="showPage('tools', this)">
+        <span class="icon">⚒</span> Tools
+        <span class="nav-badge" id="nav-badge-tools" style="display:none">0</span>
+      </div>
       <div class="nav-item" onclick="showPage('marketplace', this)">
         <span class="icon">◈</span> Marketplace
       </div>
@@ -829,22 +840,22 @@
       </div>
 
       <div class="stats-row">
-        <div class="stat-card" style="--accent-color:var(--accent)">
+        <div class="stat-card" style="--accent-color:var(--accent)" onclick="showPage('servers')">
           <div class="stat-label">Servers Active</div>
           <div class="stat-value" id="stat-servers">—</div>
           <div class="stat-desc" id="stat-total-desc">of <span id="stat-total">—</span> registered</div>
         </div>
-        <div class="stat-card" style="--accent-color:var(--accent2)">
+        <div class="stat-card" style="--accent-color:var(--accent2)" onclick="showPage('tools')">
           <div class="stat-label">Total Tools</div>
           <div class="stat-value" id="stat-tools">—</div>
           <div class="stat-desc">exposed via MCP</div>
         </div>
-        <div class="stat-card" style="--accent-color:var(--accent3)">
+        <div class="stat-card" style="--accent-color:var(--accent3)" onclick="showPage('agents')">
           <div class="stat-label">Agents</div>
           <div class="stat-value" id="stat-agents">—</div>
           <div class="stat-desc">server compositions</div>
         </div>
-        <div class="stat-card" style="--accent-color:var(--warn)">
+        <div class="stat-card" style="--accent-color:var(--warn)" onclick="showPage('logs', null, {logFilter:'__endpoint__'})">
           <div class="stat-label">Calls Today</div>
           <div class="stat-value" id="stat-calls">—</div>
           <div class="stat-desc">tool invocations</div>
@@ -905,6 +916,19 @@
       <div id="market-more" style="text-align:center;padding:24px 0;display:none">
         <button class="btn btn-ghost" onclick="loadMoreMarket()">Load more</button>
       </div>
+    </div>
+
+    <!-- LOGS -->
+    <!-- TOOLS -->
+    <div id="page-tools" class="page">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Tools</div>
+          <div class="page-subtitle">All MCP tools exposed by running servers</div>
+        </div>
+        <input id="tools-search" class="form-input" placeholder="Filter tools…" oninput="filterTools()" style="width:200px" />
+      </div>
+      <div class="cards-grid" id="tools-grid"></div>
     </div>
 
     <!-- LOGS -->
@@ -1547,7 +1571,7 @@ function formatLogLine(entry) {
   return `<div class="log-line${cls ? ' ' + cls : ''}">[${ts}] [${esc(name)}] ${esc(entry.line)}</div>`;
 }
 
-async function initLogsPage() {
+async function initLogsPage(initialFilter = '') {
   const viewer = document.getElementById('global-log-viewer');
   if (!viewer) return;
 
@@ -1557,6 +1581,7 @@ async function initLogsPage() {
     filterEl.innerHTML = '<option value="">All Sources</option>' +
       '<option value="__endpoint__">Endpoint Traffic</option>' +
       servers.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    if (initialFilter) filterEl.value = initialFilter;
   }
 
   // Only fetch from API if buffer is empty (SSE keeps it warm after first load)
@@ -1575,6 +1600,56 @@ async function initLogsPage() {
   }
 
   renderAllLogs();
+}
+
+// ── Tools page ────────────────────────────────────────────────────────────────
+let _allTools = [];
+
+async function initToolsPage() {
+  const grid = document.getElementById('tools-grid');
+  if (!grid) return;
+  grid.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:20px 0">Loading…</div>';
+  const searchEl = document.getElementById('tools-search');
+  if (searchEl) searchEl.value = '';
+  try {
+    _allTools = await api.get('/api/tools');
+    const badge = document.getElementById('nav-badge-tools');
+    if (badge) { badge.textContent = _allTools.length; badge.style.display = _allTools.length ? '' : 'none'; }
+    filterTools();
+  } catch (e) {
+    grid.innerHTML = `<div style="color:var(--muted);font-size:13px;padding:20px 0">Failed to load tools: ${esc(e.message)}</div>`;
+  }
+}
+
+function filterTools() {
+  const q = (document.getElementById('tools-search')?.value || '').toLowerCase();
+  const filtered = q
+    ? _allTools.filter(t => t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q) || (t.serverName || '').toLowerCase().includes(q))
+    : _allTools;
+  const grid = document.getElementById('tools-grid');
+  if (!grid) return;
+  if (!filtered.length) {
+    grid.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:20px 0">No tools found.</div>';
+    return;
+  }
+  const iconBgMap = { npm: 'rgba(0,229,160,0.12)', docker: 'rgba(124,106,255,0.12)', local: 'rgba(255,107,74,0.12)', remote: 'rgba(255,170,0,0.12)' };
+  const serverTypeMap = Object.fromEntries(servers.map(s => [s.id, s.type]));
+  grid.innerHTML = filtered.map(t => {
+    const sType = serverTypeMap[t.serverId] || 'npm';
+    const iconBg = iconBgMap[sType] || 'rgba(90,96,114,0.15)';
+    return `<div class="server-card">
+      <div class="card-top">
+        <div class="card-icon-wrap">
+          <div class="card-icon" style="background:${iconBg}">${t.serverIcon || '⚙'}</div>
+          <div>
+            <div class="card-name" style="font-family:'JetBrains Mono',monospace;font-size:12px">${esc(t.name)}</div>
+            <div class="card-type">${esc(t.serverName || '')}</div>
+          </div>
+        </div>
+      </div>
+      ${t.description ? `<div class="card-desc">${esc(t.description)}</div>` : ''}
+    </div>`;
+  }).join('');
 }
 
 function renderAllLogs() {
@@ -1610,13 +1685,19 @@ function exportLogs() {
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
-function showPage(name, el) {
+function showPage(name, el, opts = {}) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+name).classList.add('active');
-  if (el) el.classList.add('active');
+  if (el) {
+    el.classList.add('active');
+  } else {
+    const navEl = document.querySelector(`.nav-item[onclick*="'${name}'"]`);
+    if (navEl) navEl.classList.add('active');
+  }
   if (name === 'marketplace' && !_mktLoaded) loadMarketplace();
-  if (name === 'logs') initLogsPage();
+  if (name === 'logs') initLogsPage(opts.logFilter || '');
+  if (name === 'tools') initToolsPage();
 }
 
 function openModal(name) {

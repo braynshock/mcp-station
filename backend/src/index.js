@@ -416,6 +416,24 @@ app.delete('/api/agents/:id', requireAuth, (req, res) => {
   res.status(204).end();
 });
 
+// ─── Tools API ────────────────────────────────────────────────────────────────
+app.get('/api/tools', requireAuth, async (req, res) => {
+  const result = [];
+  for (const server of config.servers) {
+    if (server.transport === 'remote') continue;
+    const entry = processes.get(server.id);
+    if (!entry || entry.status !== 'running') continue;
+    try {
+      if (!entry.initialized) await initializeMcpServer(server.id);
+      const r = await mcpRequest(server.id, 'tools/list', {});
+      for (const t of r?.tools ?? []) {
+        result.push({ ...t, serverId: server.id, serverName: server.name, serverIcon: server.icon });
+      }
+    } catch (_) { /* skip unreachable servers */ }
+  }
+  res.json(result);
+});
+
 // ─── Stats API ────────────────────────────────────────────────────────────────
 app.get('/api/stats', requireAuth, (req, res) => {
   const running = [...processes.values()].filter((p) => p.status === 'running').length;
