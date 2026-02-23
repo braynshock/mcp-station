@@ -1114,6 +1114,7 @@
 let servers = [];
 let agents = [];
 let callsToday = 0;
+let totalTools = 0;
 let marketplaceItems = [];
 let _mktAllItems = [];
 let _mktNextCursor = null;
@@ -1185,7 +1186,9 @@ function connectSSE() {
   });
   es.addEventListener('stats', e => {
     const data = JSON.parse(e.data);
-    if (data.callsToday !== undefined) { callsToday = data.callsToday; renderAll(); }
+    if (data.callsToday !== undefined) callsToday = data.callsToday;
+    if (data.totalTools !== undefined) totalTools = data.totalTools;
+    renderAll();
   });
   es.addEventListener('log', e => {
     const { serverId, ts, line } = JSON.parse(e.data);
@@ -1213,6 +1216,7 @@ async function loadData() {
   servers = svrs;
   agents = agts;
   callsToday = stats.callsToday ?? 0;
+  totalTools = stats.totalTools ?? 0;
   renderAll();
 }
 
@@ -1221,7 +1225,6 @@ function renderAll() {
   document.getElementById('stat-servers').textContent = running.length;
   document.getElementById('stat-total').textContent = servers.length;
   document.getElementById('stat-agents').textContent = agents.length;
-  const totalTools = servers.reduce((sum, s) => sum + (s.tools?.length || 0), 0);
   document.getElementById('stat-tools').textContent = totalTools;
   document.getElementById('stat-calls').textContent = callsToday;
   const serversBadge = document.getElementById('nav-badge-servers');

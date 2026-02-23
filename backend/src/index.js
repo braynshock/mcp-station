@@ -135,6 +135,7 @@ async function initializeMcpServer(serverId) {
     // Eagerly populate the global tool map
     const r = await mcpRequest(serverId, 'tools/list', {});
     for (const t of r?.tools ?? []) mcpToolMap.set(t.name, serverId);
+    broadcast('stats', { totalTools: mcpToolMap.size });
     appendLog(serverId, `[station] MCP ready — ${r?.tools?.length ?? 0} tool(s) registered`);
   } catch (err) {
     appendLog(serverId, `[station] MCP init failed: ${err.message}`);
