@@ -135,6 +135,7 @@ async function initializeMcpServer(serverId) {
     // Eagerly populate the global tool map
     const r = await mcpRequest(serverId, 'tools/list', {});
     for (const t of r?.tools ?? []) mcpToolMap.set(t.name, serverId);
+    broadcast('stats', { totalTools: mcpToolMap.size });
     appendLog(serverId, `[station] MCP ready — ${r?.tools?.length ?? 0} tool(s) registered`);
   } catch (err) {
     appendLog(serverId, `[station] MCP init failed: ${err.message}`);
@@ -413,6 +414,24 @@ app.delete('/api/agents/:id', requireAuth, (req, res) => {
   config.agents = config.agents.filter((a) => a.id !== req.params.id);
   saveConfig(config);
   res.status(204).end();
+});
+
+// ─── Tools API ────────────────────────────────────────────────────────────────
+app.get('/api/tools', requireAuth, async (req, res) => {
+  const result = [];
+  for (const server of config.servers) {
+    if (server.transport === 'remote') continue;
+    const entry = processes.get(server.id);
+    if (!entry || entry.status !== 'running') continue;
+    try {
+      if (!entry.initialized) await initializeMcpServer(server.id);
+      const r = await mcpRequest(server.id, 'tools/list', {});
+      for (const t of r?.tools ?? []) {
+        result.push({ ...t, serverId: server.id, serverName: server.name, serverIcon: server.icon });
+      }
+    } catch (_) { /* skip unreachable servers */ }
+  }
+  res.json(result);
 });
 
 // ─── Stats API ────────────────────────────────────────────────────────────────
